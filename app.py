@@ -25,7 +25,7 @@ def ass_time(seconds):
     m = int((seconds % 3600) // 60)
     s = seconds % 60
     cs = int((seconds % 1) * 100)
-    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+    return return f"{h}:{m:02d}:{s:05.2f}"
 
 def make_caption_groups(segments, max_words=4, max_duration=1.8):
     groups = []
