@@ -2,7 +2,6 @@ import streamlit as st
 import subprocess
 import tempfile
 import os
-import re
 from transformers import pipeline
 
 st.set_page_config(
@@ -60,7 +59,6 @@ def split_text(text):
     if not text:
         return []
 
-    # Khmer v9 ប្រើ ; ជាក្រុម
     parts = [
         x.strip()
         for x in text.split(";")
@@ -70,14 +68,12 @@ def split_text(text):
     if len(parts) > 1:
         return parts
 
-    # បើគ្មាន ; បែងជាក្រុមតូចៗ
     words = text.split()
 
     if not words:
         return []
 
     groups = []
-
     current = []
 
     for word in words:
@@ -138,7 +134,6 @@ def make_groups_from_text(text, duration):
     if not parts:
         return []
 
-    # កុំឱ្យ Caption ចេញទាំងអស់ក្នុងពេលតែមួយ
     step = duration / len(parts)
 
     groups = []
@@ -168,7 +163,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Khmer,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,3,1,2,50,50,140,1
+Style: Khmer,Noto Sans Khmer,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,4,1,2,50,50,140,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -240,7 +235,6 @@ if video:
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
-            # 1. ដកសំឡេងចេញពីវីដេអូ
             with st.spinner("🔊 កំពុងរៀបចំសំឡេង..."):
 
                 subprocess.run(
@@ -265,7 +259,6 @@ if video:
 
             duration = get_duration(input_file)
 
-            # 2. ស្គាល់សំឡេងខ្មែរ
             with st.spinner("🎙️ កំពុងស្គាល់សំឡេងខ្មែរ..."):
 
                 model = load_model()
@@ -275,13 +268,10 @@ if video:
                     return_timestamps=True
                 )
 
-            # 3. ព្យាយាមប្រើ timestamp
             chunks = result.get("chunks", [])
 
             groups = make_groups_from_chunks(chunks)
 
-            # 4. បើ timestamp មិនមាន
-            #    ប្រើអត្ថបទហើយបែងជាក្រុមតូចៗ
             if not groups:
 
                 full_text = result.get(
@@ -292,55 +282,4 @@ if video:
                 groups = make_groups_from_text(
                     full_text,
                     duration
-                )
-
-            # 5. បើនៅតែមិនមាន
-            if not groups:
-
-                st.error(
-                    "❌ AI មិនអាចស្គាល់សំឡេងបានទេ។"
-                )
-
-                st.stop()
-
-            # 6. បង្កើត subtitle
-            create_ass(
-                groups,
-                ass_file
-            )
-
-            # 7. ដាក់ Caption ចូលវីដេអូ
-            with st.spinner("🎬 កំពុងដាក់ Caption..."):
-
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        input_file,
-                        "-vf",
-                        f"ass={ass_file}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "veryfast",
-                        "-c:a",
-                        "aac",
-                        output_file
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE
-                )
-
-            st.success("✅ រួចរាល់!")
-
-            with open(output_file, "rb") as f:
-
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូមាន Caption",
-                    f,
-                    file_name="khmer_caption.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
+               
