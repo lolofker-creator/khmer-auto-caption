@@ -2,7 +2,10 @@ import streamlit as st
 import subprocess
 import tempfile
 import os
+import threading
+import time
 from transformers import pipeline
+
 
 st.set_page_config(
     page_title="Smey Auto Caption",
@@ -13,8 +16,29 @@ st.title("🇰🇭 Smey Auto Caption")
 st.write("បញ្ចូលវីដេអូ → ស្គាល់សំឡេងខ្មែរ → Caption តាមការនិយាយ")
 
 
+# =========================================================
+# QUEUE
+# =========================================================
+
+if "processing_lock" not in st.session_state:
+    pass
+
+
+@st.cache_resource
+def get_processing_lock():
+    return threading.Lock()
+
+
+processing_lock = get_processing_lock()
+
+
+# =========================================================
+# MODEL
+# =========================================================
+
 @st.cache_resource
 def load_model():
+
     return pipeline(
         "automatic-speech-recognition",
         model="1morecupofhottea/whisper-turbo-khmer-v9",
@@ -23,7 +47,12 @@ def load_model():
     )
 
 
+# =========================================================
+# TIME
+# =========================================================
+
 def ass_time(seconds):
+
     seconds = max(0, float(seconds))
 
     h = int(seconds // 3600)
@@ -33,7 +62,12 @@ def ass_time(seconds):
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
+# =========================================================
+# VIDEO DURATION
+# =========================================================
+
 def get_duration(filename):
+
     result = subprocess.run(
         [
             "ffprobe",
@@ -53,7 +87,12 @@ def get_duration(filename):
     return float(result.stdout.strip())
 
 
+# =========================================================
+# CLEAN TEXT
+# =========================================================
+
 def clean_text(text):
+
     return (
         text
         .strip()
@@ -63,7 +102,12 @@ def clean_text(text):
     )
 
 
+# =========================================================
+# WORD TIMESTAMP GROUPS
+# =========================================================
+
 def make_word_groups(chunks, words_per_caption=4):
+
     words = []
 
     for chunk in chunks:
@@ -84,14 +128,11 @@ def make_word_groups(chunks, words_per_caption=4):
         if not text:
             continue
 
-        # Khmer model may return groups separated by spaces
         pieces = text.split()
 
         if not pieces:
             continue
 
-        # A timestamp may cover several pieces.
-        # Divide that timestamp approximately between them.
         total = len(pieces)
         duration = max(0.05, end - start)
 
@@ -157,6 +198,10 @@ def make_word_groups(chunks, words_per_caption=4):
     return groups
 
 
+# =========================================================
+# SEGMENT TIMESTAMP FALLBACK
+# =========================================================
+
 def make_segment_groups(chunks):
 
     groups = []
@@ -177,6 +222,7 @@ def make_segment_groups(chunks):
         text = clean_text(text)
 
         if text:
+
             groups.append(
                 (
                     start,
@@ -187,6 +233,10 @@ def make_segment_groups(chunks):
 
     return groups
 
+
+# =========================================================
+# TEXT FALLBACK
+# =========================================================
 
 def make_fallback_groups(text, duration):
 
@@ -206,7 +256,6 @@ def make_fallback_groups(text, duration):
         words = parts[0].split()
 
         parts = []
-
         current = []
 
         for word in words:
@@ -222,6 +271,7 @@ def make_fallback_groups(text, duration):
                 current = []
 
         if current:
+
             parts.append(
                 " ".join(current)
             )
@@ -248,6 +298,10 @@ def make_fallback_groups(text, duration):
 
     return groups
 
+
+# =========================================================
+# CREATE ASS
+# =========================================================
 
 def create_ass(groups, filename):
 
@@ -290,6 +344,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
 
+# =========================================================
+# UPLOAD
+# =========================================================
+
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
     type=[
@@ -310,170 +368,258 @@ if video:
         use_container_width=True
     ):
 
-        with tempfile.TemporaryDirectory() as folder:
+        # =================================================
+        # QUEUE
+        # =================================================
 
-            input_file = os.path.join(
-                folder,
-                "input.mp4"
+        if processing_lock.locked():
+
+            st.info(
+                "⏳ មានអ្នកផ្សេងកំពុងប្រើ AI។ "
+                "អ្នកត្រូវបានដាក់ចូលជួរ ហើយនឹងដំណើរការបន្ទាប់។"
             )
 
-            audio_file = os.path.join(
-                folder,
-                "audio.wav"
-            )
+        queue_start = time.time()
 
-            ass_file = os.path.join(
-                folder,
-                "caption.ass"
-            )
+        with st.spinner(
+            "⏳ កំពុងរង់ចាំជួរ..."
+        ):
 
-            output_file = os.path.join(
-                folder,
-                "output.mp4"
-            )
+            processing_lock.acquire()
 
-            with open(
-                input_file,
-                "wb"
-            ) as f:
+        wait_time = time.time() - queue_start
 
-                f.write(
-                    video.getbuffer()
+        try:
+
+            if wait_time > 1:
+
+                st.success(
+                    "✅ ដល់វេនរបស់អ្នកហើយ!"
                 )
 
-            with st.spinner(
-                "🔊 កំពុងរៀបចំសំឡេង..."
-            ):
+            else:
 
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        input_file,
-                        "-vn",
-                        "-ac",
-                        "1",
-                        "-ar",
-                        "16000",
-                        "-c:a",
-                        "pcm_s16le",
-                        audio_file
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE
+                st.info(
+                    "🚀 ចាប់ផ្តើមដំណើរការ..."
                 )
 
-            duration = get_duration(
-                input_file
-            )
 
-            with st.spinner(
-                "🎙️ កំពុងស្គាល់សំឡេងខ្មែរ និងកំណត់ពេល Caption..."
-            ):
+            # =============================================
+            # TEMP FILES
+            # =============================================
 
-                model = load_model()
+            with tempfile.TemporaryDirectory() as folder:
 
-                try:
+                input_file = os.path.join(
+                    folder,
+                    "input.mp4"
+                )
 
-                    result = model(
-                        audio_file,
-                        return_timestamps="word"
+                audio_file = os.path.join(
+                    folder,
+                    "audio.wav"
+                )
+
+                ass_file = os.path.join(
+                    folder,
+                    "caption.ass"
+                )
+
+                output_file = os.path.join(
+                    folder,
+                    "output.mp4"
+                )
+
+
+                # =========================================
+                # SAVE VIDEO
+                # =========================================
+
+                with open(
+                    input_file,
+                    "wb"
+                ) as f:
+
+                    f.write(
+                        video.getbuffer()
                     )
 
-                except Exception:
 
-                    # Fallback to Whisper segment timestamps
-                    result = model(
-                        audio_file,
-                        return_timestamps=True
+                # =========================================
+                # EXTRACT AUDIO
+                # =========================================
+
+                with st.spinner(
+                    "🔊 កំពុងរៀបចំសំឡេង..."
+                ):
+
+                    subprocess.run(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            input_file,
+                            "-vn",
+                            "-ac",
+                            "1",
+                            "-ar",
+                            "16000",
+                            "-c:a",
+                            "pcm_s16le",
+                            audio_file
+                        ],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE
                     )
 
-            chunks = result.get(
-                "chunks",
-                []
-            )
 
-            # First choice: real word timestamps
-            groups = make_word_groups(
-                chunks,
-                words_per_caption=4
-            )
-
-            # Second choice: segment timestamps
-            if not groups:
-
-                groups = make_segment_groups(
-                    chunks
+                duration = get_duration(
+                    input_file
                 )
 
-            # Last fallback
-            if not groups:
 
-                full_text = result.get(
-                    "text",
-                    ""
+                # =========================================
+                # AI
+                # =========================================
+
+                with st.spinner(
+                    "🎙️ AI កំពុងស្គាល់សំឡេងខ្មែរ..."
+                ):
+
+                    model = load_model()
+
+                    try:
+
+                        result = model(
+                            audio_file,
+                            return_timestamps="word"
+                        )
+
+                    except Exception:
+
+                        result = model(
+                            audio_file,
+                            return_timestamps=True
+                        )
+
+
+                chunks = result.get(
+                    "chunks",
+                    []
                 )
 
-                groups = make_fallback_groups(
-                    full_text,
-                    duration
+
+                # =========================================
+                # WORD TIMESTAMP
+                # =========================================
+
+                groups = make_word_groups(
+                    chunks,
+                    words_per_caption=4
                 )
 
-            if not groups:
 
-                st.error(
-                    "❌ AI មិនអាចស្គាល់សំឡេងបានទេ។"
+                # =========================================
+                # SEGMENT FALLBACK
+                # =========================================
+
+                if not groups:
+
+                    groups = make_segment_groups(
+                        chunks
+                    )
+
+
+                # =========================================
+                # TEXT FALLBACK
+                # =========================================
+
+                if not groups:
+
+                    full_text = result.get(
+                        "text",
+                        ""
+                    )
+
+                    groups = make_fallback_groups(
+                        full_text,
+                        duration
+                    )
+
+
+                if not groups:
+
+                    st.error(
+                        "❌ AI មិនអាចស្គាល់សំឡេងបានទេ។"
+                    )
+
+                    st.stop()
+
+
+                # =========================================
+                # CREATE CAPTION
+                # =========================================
+
+                create_ass(
+                    groups,
+                    ass_file
                 )
 
-                st.stop()
 
-            create_ass(
-                groups,
-                ass_file
-            )
+                # =========================================
+                # BURN CAPTION
+                # =========================================
 
-            with st.spinner(
-                "🎬 កំពុងដាក់ Caption តាមពេលនិយាយ..."
-            ):
+                with st.spinner(
+                    "🎬 កំពុងដាក់ Caption តាមសំឡេង..."
+                ):
 
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        input_file,
-                        "-vf",
-                        f"ass={ass_file}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "veryfast",
-                        "-c:a",
-                        "aac",
-                        "-movflags",
-                        "+faststart",
-                        output_file
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE
+                    subprocess.run(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            input_file,
+                            "-vf",
+                            f"ass={ass_file}",
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "veryfast",
+                            "-c:a",
+                            "aac",
+                            "-movflags",
+                            "+faststart",
+                            output_file
+                        ],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE
+                    )
+
+
+                # =========================================
+                # RESULT
+                # =========================================
+
+                st.success(
+                    "✅ រួចរាល់!"
                 )
 
-            st.success(
-                "✅ រួចរាល់! Caption ត្រូវបានកំណត់តាមពេលសំឡេង។"
-            )
+                with open(
+                    output_file,
+                    "rb"
+                ) as f:
 
-            with open(
-                output_file,
-                "rb"
-            ) as f:
+                    st.download_button(
+                        "⬇️ ទាញយកវីដេអូមាន Caption",
+                        f,
+                        file_name="khmer_caption.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
 
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូមាន Caption",
-                    f,
-                    file_name="khmer_caption.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
+        finally:
+
+            processing_lock.release()
