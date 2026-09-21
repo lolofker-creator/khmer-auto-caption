@@ -1,4 +1,2 @@
 streamlit
-transformers
-torch
-torchvision
+google-genai
