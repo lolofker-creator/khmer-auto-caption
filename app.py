@@ -4,6 +4,7 @@ import tempfile
 import os
 from transformers import pipeline
 
+
 st.set_page_config(
     page_title="Smey Auto Caption",
     page_icon="🇰🇭"
@@ -59,6 +60,7 @@ def split_text(text):
     if not text:
         return []
 
+    # Khmer v9 ប្រើ ; ដើម្បីបែងចែកក្រុម
     parts = [
         x.strip()
         for x in text.split(";")
@@ -68,6 +70,7 @@ def split_text(text):
     if len(parts) > 1:
         return parts
 
+    # បើគ្មាន ; បែងជាក្រុមតូចៗ
     words = text.split()
 
     if not words:
@@ -113,9 +116,8 @@ def make_groups_from_chunks(chunks):
         step = duration / len(parts)
 
         for i, part in enumerate(parts):
-
-            part_start = start + i * step
-            part_end = start + (i + 1) * step
+            part_start = start + (i * step)
+            part_end = start + ((i + 1) * step)
 
             groups.append(
                 (
@@ -139,7 +141,6 @@ def make_groups_from_text(text, duration):
     groups = []
 
     for i, part in enumerate(parts):
-
         start = i * step
         end = (i + 1) * step
 
@@ -170,7 +171,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     with open(filename, "w", encoding="utf-8") as f:
-
         f.write(header)
 
         for start, end, text in groups:
@@ -197,7 +197,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
-    type=["mp4", "mov", "mkv", "webm"]
+    type=[
+        "mp4",
+        "mov",
+        "mkv",
+        "webm"
+    ]
 )
 
 
@@ -232,10 +237,14 @@ if video:
                 "output.mp4"
             )
 
+            # រក្សាទុកវីដេអូ
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
-            with st.spinner("🔊 កំពុងរៀបចំសំឡេង..."):
+            # ដកសំឡេងចេញពីវីដេអូ
+            with st.spinner(
+                "🔊 កំពុងរៀបចំសំឡេង..."
+            ):
 
                 subprocess.run(
                     [
@@ -257,9 +266,15 @@ if video:
                     stderr=subprocess.PIPE
                 )
 
-            duration = get_duration(input_file)
+            # រកប្រវែងវីដេអូ
+            duration = get_duration(
+                input_file
+            )
 
-            with st.spinner("🎙️ កំពុងស្គាល់សំឡេងខ្មែរ..."):
+            # AI ស្គាល់សំឡេងខ្មែរ
+            with st.spinner(
+                "🎙️ កំពុងស្គាល់សំឡេងខ្មែរ..."
+            ):
 
                 model = load_model()
 
@@ -268,10 +283,18 @@ if video:
                     return_timestamps=True
                 )
 
-            chunks = result.get("chunks", [])
+            # យក timestamp ពី AI
+            chunks = result.get(
+                "chunks",
+                []
+            )
 
-            groups = make_groups_from_chunks(chunks)
+            groups = make_groups_from_chunks(
+                chunks
+            )
 
+            # បើ AI មិនផ្តល់ timestamp
+            # ប្រើអត្ថបទហើយបែងជាក្រុម
             if not groups:
 
                 full_text = result.get(
@@ -282,4 +305,62 @@ if video:
                 groups = make_groups_from_text(
                     full_text,
                     duration
-               
+                )
+
+            # បើមិនមានអត្ថបទ
+            if not groups:
+
+                st.error(
+                    "❌ AI មិនអាចស្គាល់សំឡេងបានទេ។"
+                )
+
+                st.stop()
+
+            # បង្កើត subtitle
+            create_ass(
+                groups,
+                ass_file
+            )
+
+            # ដាក់ Caption ចូលវីដេអូ
+            with st.spinner(
+                "🎬 កំពុងដាក់ Caption..."
+            ):
+
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        input_file,
+                        "-vf",
+                        f"ass={ass_file}",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-c:a",
+                        "aac",
+                        output_file
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE
+                )
+
+            st.success(
+                "✅ រួចរាល់!"
+            )
+
+            with open(
+                output_file,
+                "rb"
+            ) as f:
+
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូមាន Caption",
+                    f,
+                    file_name="khmer_caption.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
