@@ -16,36 +16,29 @@ st.title("🇰🇭 Smey Auto Caption")
 st.write("បញ្ចូលវីដេអូ → Caption ខ្មែរ")
 
 
-# Load model only once
 @st.cache_resource(show_spinner=False)
 def load_model():
     return WhisperModel(
         "PhanithLIM/whisper-small-khmer-ct2",
         device="cpu",
         compute_type="int8",
-        cpu_threads=4,
+        cpu_threads=2,
         num_workers=1,
     )
 
 
 def extract_audio(video_path, audio_path):
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        video_path,
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        audio_path,
-    ]
-
     subprocess.run(
-        command,
+        [
+            "ffmpeg",
+            "-y",
+            "-i", video_path,
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-c:a", "pcm_s16le",
+            audio_path,
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=True,
@@ -55,74 +48,26 @@ def extract_audio(video_path, audio_path):
 def ass_time(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
-    s = seconds % 60
+    s = int(seconds % 60)
     cs = int((seconds - int(seconds)) * 100)
-
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def make_caption_groups(segments, max_words=5, max_duration=2.0):
+def make_caption_groups(segments):
     groups = []
 
     for seg in segments:
-        words = getattr(seg, "words", None)
+        text = seg.text.strip()
 
-        if not words:
-            text = seg.text.strip()
-
-            if text:
-                groups.append(
-                    (seg.start, seg.end, text)
-                )
-
-            continue
-
-        current = []
-        start = None
-        last_end = None
-
-        for word in words:
-            text = (word.word or "").strip()
-
-            if not text:
-                continue
-
-            if start is None:
-                start = word.start
-
-            current.append(text)
-            last_end = word.end
-
-            if (
-                len(current) >= max_words
-                or (last_end - start) >= max_duration
-            ):
-                groups.append(
-                    (
-                        start,
-                        last_end,
-                        " ".join(current),
-                    )
-                )
-
-                current = []
-                start = None
-                last_end = None
-
-        if current and start is not None and last_end is not None:
+        if text:
             groups.append(
-                (
-                    start,
-                    last_end,
-                    " ".join(current),
-                )
+                (seg.start, seg.end, text)
             )
 
     return groups
 
 
 def create_ass(groups, filename):
-
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -140,7 +85,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write(header)
 
         for start, end, text in groups:
-
             text = text.replace("\n", " ")
             text = text.replace("{", r"\{")
             text = text.replace("}", r"\}")
@@ -163,32 +107,26 @@ if video is not None:
 
     if st.button("🚀 បង្កើត Caption", use_container_width=True):
 
-        model = load_model()
+        with st.status("កំពុងបង្កើត Caption...", expanded=False):
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+            model = load_model()
 
-            video_path = os.path.join(
-                temp_dir,
-                "input_video.mp4"
-            )
+            with tempfile.TemporaryDirectory() as temp_dir:
 
-            audio_path = os.path.join(
-                temp_dir,
-                "audio.wav"
-            )
+                video_path = os.path.join(
+                    temp_dir, "input.mp4"
+                )
 
-            ass_path = os.path.join(
-                temp_dir,
-                "caption.ass"
-            )
+                audio_path = os.path.join(
+                    temp_dir, "audio.wav"
+                )
 
-            with open(video_path, "wb") as f:
-                f.write(video.getbuffer())
+                ass_path = os.path.join(
+                    temp_dir, "caption.ass"
+                )
 
-            with st.status(
-                "កំពុងបង្កើត Caption...",
-                expanded=False
-            ):
+                with open(video_path, "wb") as f:
+                    f.write(video.getbuffer())
 
                 extract_audio(
                     video_path,
@@ -201,16 +139,14 @@ if video is not None:
                     beam_size=1,
                     best_of=1,
                     temperature=0,
-                    word_timestamps=True,
+                    word_timestamps=False,
                     vad_filter=True,
                 )
 
                 segments = list(segments)
 
                 groups = make_caption_groups(
-                    segments,
-                    max_words=5,
-                    max_duration=2.0,
+                    segments
                 )
 
                 create_ass(
@@ -218,17 +154,19 @@ if video is not None:
                     ass_path
                 )
 
-            st.success("✅ Caption រួចរាល់")
+                with open(
+                    ass_path,
+                    "rb"
+                ) as f:
 
-            with open(
-                ass_path,
-                "rb"
-            ) as f:
+                    data = f.read()
 
-                st.download_button(
-                    "⬇️ ទាញយក Caption",
-                    data=f,
-                    file_name="khmer_caption.ass",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
+        st.success("✅ Caption រួចរាល់")
+
+        st.download_button(
+            "⬇️ ទាញយក Caption",
+            data=data,
+            file_name="khmer_caption.ass",
+            mime="text/plain",
+            use_container_width=True,
+        )
