@@ -4,7 +4,6 @@ import tempfile
 import os
 from transformers import pipeline
 
-
 st.set_page_config(
     page_title="Smey Auto Caption",
     page_icon="🇰🇭"
@@ -54,48 +53,116 @@ def get_duration(filename):
     return float(result.stdout.strip())
 
 
-def split_text(text):
-    text = text.strip()
+def clean_text(text):
+    return (
+        text
+        .strip()
+        .replace("\n", " ")
+        .replace("{", r"\{")
+        .replace("}", r"\}")
+    )
 
-    if not text:
-        return []
 
-    # Khmer v9 ប្រើ ; ដើម្បីបែងចែកក្រុម
-    parts = [
-        x.strip()
-        for x in text.split(";")
-        if x.strip()
-    ]
+def make_word_groups(chunks, words_per_caption=4):
+    words = []
 
-    if len(parts) > 1:
-        return parts
+    for chunk in chunks:
 
-    # បើគ្មាន ; បែងជាក្រុមតូចៗ
-    words = text.split()
+        text = chunk.get("text", "")
+        timestamp = chunk.get("timestamp")
+
+        if not text or not timestamp:
+            continue
+
+        start, end = timestamp
+
+        if start is None or end is None:
+            continue
+
+        text = text.strip()
+
+        if not text:
+            continue
+
+        # Khmer model may return groups separated by spaces
+        pieces = text.split()
+
+        if not pieces:
+            continue
+
+        # A timestamp may cover several pieces.
+        # Divide that timestamp approximately between them.
+        total = len(pieces)
+        duration = max(0.05, end - start)
+
+        for i, piece in enumerate(pieces):
+
+            word_start = start + (
+                duration * i / total
+            )
+
+            word_end = start + (
+                duration * (i + 1) / total
+            )
+
+            words.append(
+                (
+                    word_start,
+                    word_end,
+                    piece
+                )
+            )
 
     if not words:
         return []
 
     groups = []
-    current = []
 
-    for word in words:
-        current.append(word)
+    current_words = []
+    current_start = None
+    current_end = None
 
-        if len(current) >= 4:
-            groups.append(" ".join(current))
-            current = []
+    for start, end, word in words:
 
-    if current:
-        groups.append(" ".join(current))
+        if current_start is None:
+            current_start = start
+
+        current_words.append(word)
+        current_end = end
+
+        if len(current_words) >= words_per_caption:
+
+            groups.append(
+                (
+                    current_start,
+                    current_end,
+                    " ".join(current_words)
+                )
+            )
+
+            current_words = []
+            current_start = None
+            current_end = None
+
+    if current_words:
+
+        groups.append(
+            (
+                current_start,
+                current_end,
+                " ".join(current_words)
+            )
+        )
 
     return groups
 
 
-def make_groups_from_chunks(chunks):
+def make_segment_groups(chunks):
+
     groups = []
 
     for chunk in chunks:
+
         timestamp = chunk.get("timestamp")
         text = chunk.get("text", "").strip()
 
@@ -107,31 +174,57 @@ def make_groups_from_chunks(chunks):
         if start is None or end is None:
             continue
 
-        parts = split_text(text)
+        text = clean_text(text)
 
-        if not parts:
-            continue
-
-        duration = max(0.1, end - start)
-        step = duration / len(parts)
-
-        for i, part in enumerate(parts):
-            part_start = start + (i * step)
-            part_end = start + ((i + 1) * step)
-
+        if text:
             groups.append(
                 (
-                    part_start,
-                    part_end,
-                    part
+                    start,
+                    end,
+                    text
                 )
             )
 
     return groups
 
 
-def make_groups_from_text(text, duration):
-    parts = split_text(text)
+def make_fallback_groups(text, duration):
+
+    text = text.strip()
+
+    if not text:
+        return []
+
+    parts = [
+        x.strip()
+        for x in text.split(";")
+        if x.strip()
+    ]
+
+    if len(parts) == 1:
+
+        words = parts[0].split()
+
+        parts = []
+
+        current = []
+
+        for word in words:
+
+            current.append(word)
+
+            if len(current) >= 4:
+
+                parts.append(
+                    " ".join(current)
+                )
+
+                current = []
+
+        if current:
+            parts.append(
+                " ".join(current)
+            )
 
     if not parts:
         return []
@@ -141,6 +234,7 @@ def make_groups_from_text(text, duration):
     groups = []
 
     for i, part in enumerate(parts):
+
         start = i * step
         end = (i + 1) * step
 
@@ -148,7 +242,7 @@ def make_groups_from_text(text, duration):
             (
                 start,
                 end,
-                part
+                clean_text(part)
             )
         )
 
@@ -170,19 +264,20 @@ Style: Khmer,Noto Sans Khmer,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    with open(filename, "w", encoding="utf-8") as f:
+    with open(
+        filename,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
         f.write(header)
 
         for start, end, text in groups:
 
-            text = text.strip()
+            text = clean_text(text)
 
             if not text:
                 continue
-
-            text = text.replace("\n", " ")
-            text = text.replace("{", r"\{")
-            text = text.replace("}", r"\}")
 
             f.write(
                 "Dialogue: 0,"
@@ -237,11 +332,15 @@ if video:
                 "output.mp4"
             )
 
-            # រក្សាទុកវីដេអូ
-            with open(input_file, "wb") as f:
-                f.write(video.getbuffer())
+            with open(
+                input_file,
+                "wb"
+            ) as f:
 
-            # ដកសំឡេងចេញពីវីដេអូ
+                f.write(
+                    video.getbuffer()
+                )
+
             with st.spinner(
                 "🔊 កំពុងរៀបចំសំឡេង..."
             ):
@@ -266,48 +365,62 @@ if video:
                     stderr=subprocess.PIPE
                 )
 
-            # រកប្រវែងវីដេអូ
             duration = get_duration(
                 input_file
             )
 
-            # AI ស្គាល់សំឡេងខ្មែរ
             with st.spinner(
-                "🎙️ កំពុងស្គាល់សំឡេងខ្មែរ..."
+                "🎙️ កំពុងស្គាល់សំឡេងខ្មែរ និងកំណត់ពេល Caption..."
             ):
 
                 model = load_model()
 
-                result = model(
-                    audio_file,
-                    return_timestamps=True
-                )
+                try:
 
-            # យក timestamp ពី AI
+                    result = model(
+                        audio_file,
+                        return_timestamps="word"
+                    )
+
+                except Exception:
+
+                    # Fallback to Whisper segment timestamps
+                    result = model(
+                        audio_file,
+                        return_timestamps=True
+                    )
+
             chunks = result.get(
                 "chunks",
                 []
             )
 
-            groups = make_groups_from_chunks(
-                chunks
+            # First choice: real word timestamps
+            groups = make_word_groups(
+                chunks,
+                words_per_caption=4
             )
 
-            # បើ AI មិនផ្តល់ timestamp
-            # ប្រើអត្ថបទហើយបែងជាក្រុម
+            # Second choice: segment timestamps
+            if not groups:
+
+                groups = make_segment_groups(
+                    chunks
+                )
+
+            # Last fallback
             if not groups:
 
                 full_text = result.get(
                     "text",
                     ""
-                ).strip()
+                )
 
-                groups = make_groups_from_text(
+                groups = make_fallback_groups(
                     full_text,
                     duration
                 )
 
-            # បើមិនមានអត្ថបទ
             if not groups:
 
                 st.error(
@@ -316,15 +429,13 @@ if video:
 
                 st.stop()
 
-            # បង្កើត subtitle
             create_ass(
                 groups,
                 ass_file
             )
 
-            # ដាក់ Caption ចូលវីដេអូ
             with st.spinner(
-                "🎬 កំពុងដាក់ Caption..."
+                "🎬 កំពុងដាក់ Caption តាមពេលនិយាយ..."
             ):
 
                 subprocess.run(
@@ -341,6 +452,8 @@ if video:
                         "veryfast",
                         "-c:a",
                         "aac",
+                        "-movflags",
+                        "+faststart",
                         output_file
                     ],
                     check=True,
@@ -349,7 +462,7 @@ if video:
                 )
 
             st.success(
-                "✅ រួចរាល់!"
+                "✅ រួចរាល់! Caption ត្រូវបានកំណត់តាមពេលសំឡេង។"
             )
 
             with open(
