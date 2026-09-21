@@ -14,7 +14,7 @@ st.write("បញ្ចូលវីដេអូ → បង្កើត Caption �
 
 @st.cache_resource
 def load_model():
-    return WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
+    return WhisperModel("PhanithLIM/whisper-small-khmer-ct2", device="cpu", compute_type="int8")
 
 def ass_time(seconds):
     h = int(seconds // 3600)
