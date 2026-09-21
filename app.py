@@ -9,8 +9,8 @@ st.set_page_config(
     page_icon="🎬"
 )
 
-st.title("🇰🇭 Khmer Auto Caption")
-st.write("បញ្ចូលវីដេអូ → បង្កើត Caption ខ្មែរ តាមសំឡេង")
+st.title("🇰🇭 Smey Auto Caption")
+st.write("បញ្ចូលវីដេអូ → ស្តាប់សំឡេងខ្មែរ → បង្កើត Caption ខ្មែរ")
 
 
 @st.cache_resource
@@ -18,8 +18,8 @@ def load_model():
     return pipeline(
         "automatic-speech-recognition",
         model="1morecupofhottea/whisper-turbo-khmer-v9",
-        chunk_length_s=30,
-        device=-1
+        device=-1,
+        chunk_length_s=30
     )
 
 
@@ -49,11 +49,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         for start, end, text in chunks:
             text = text.strip()
-            text = text.replace("\n", " ")
-            text = text.replace("{", r"\{").replace("}", r"\}")
 
             if not text:
                 continue
+
+            text = text.replace("\n", " ")
+            text = text.replace("{", r"\{")
+            text = text.replace("}", r"\}")
 
             f.write(
                 f"Dialogue: 0,{ass_time(start)},"
@@ -83,7 +85,7 @@ if video:
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
-            with st.spinner("🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."):
+            with st.spinner("🎙️ កំពុងស្តាប់ និងស្គាល់សំឡេងខ្មែរ..."):
 
                 model = load_model()
 
@@ -96,13 +98,16 @@ if video:
                     }
                 )
 
-            chunks = []
+            chunks = result.get("chunks", [])
 
-            for chunk in result.get("chunks", []):
+            # បើមាន timestamp
+            final_chunks = []
 
+            for chunk in chunks:
                 timestamp = chunk.get("timestamp")
+                text = chunk.get("text", "").strip()
 
-                if not timestamp:
+                if not timestamp or not text:
                     continue
 
                 start, end = timestamp
@@ -110,38 +115,28 @@ if video:
                 if start is None or end is None:
                     continue
 
-                text = chunk.get("text", "").strip()
+                final_chunks.append(
+                    (start, end, text)
+                )
 
-                if not text:
-                    continue
+            # បើមិនបាន timestamp ក៏កុំឱ្យ Caption បាត់
+            if not final_chunks:
+                full_text = result.get("text", "").strip()
 
-                # បែងចែកតាម ; ដែល Khmer v9 ផ្តល់ឱ្យ
-                parts = [
-                    p.strip()
-                    for p in text.split(";")
-                    if p.strip()
-                ]
-
-                if len(parts) == 1:
-                    chunks.append(
-                        (start, end, parts[0])
+                if full_text:
+                    final_chunks.append(
+                        (0, 10, full_text)
                     )
-                else:
-                    duration = (end - start) / len(parts)
 
-                    for i, part in enumerate(parts):
-                        part_start = start + i * duration
-                        part_end = start + (i + 1) * duration
+            if not final_chunks:
+                st.error(
+                    "❌ មិនអាចស្គាល់សំឡេងបានទេ។ សូមសាកវីដេអូដែលសំឡេងនិយាយខ្មែរច្បាស់។"
+                )
+                st.stop()
 
-                        chunks.append(
-                            (part_start, part_end, part)
-                        )
+            create_ass(final_chunks, ass_file)
 
-            create_ass(chunks, ass_file)
-
-            with st.spinner(
-                "🎬 កំពុងដាក់ Caption តាមសំឡេង..."
-            ):
+            with st.spinner("🎬 កំពុងដាក់ Caption តាមសំឡេង..."):
 
                 subprocess.run(
                     [
