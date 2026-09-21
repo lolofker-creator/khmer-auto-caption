@@ -2,7 +2,7 @@ import streamlit as st
 import subprocess
 import tempfile
 import os
-from faster_whisper import WhisperModel
+from transformers import pipeline
 
 st.set_page_config(
     page_title="Khmer Auto Caption",
@@ -12,67 +12,25 @@ st.set_page_config(
 st.title("🇰🇭 Khmer Auto Caption")
 st.write("បញ្ចូលវីដេអូ → បង្កើត Caption ខ្មែរ តាមសំឡេង")
 
+
 @st.cache_resource
 def load_model():
-    return WhisperModel(
-        "PhanithLIM/whisper-small-khmer-ct2",
-        device="cpu",
-        compute_type="int8"
+    return pipeline(
+        "automatic-speech-recognition",
+        model="1morecupofhottea/whisper-turbo-khmer-v9",
+        chunk_length_s=30,
+        device=-1
     )
+
 
 def ass_time(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = seconds % 60
-    cs = int((seconds % 1) * 100)
     return f"{h}:{m:02d}:{s:05.2f}"
 
-def make_caption_groups(segments, max_words=4, max_duration=1.8):
-    groups = []
 
-    for seg in segments:
-        words = getattr(seg, "words", None)
-
-        if not words:
-            text = seg.text.strip()
-            if text:
-                groups.append((seg.start, seg.end, text))
-            continue
-
-        current = []
-        start = None
-        last_end = None
-
-        for word in words:
-            text = word.word.strip()
-
-            if not text:
-                continue
-
-            if start is None:
-                start = word.start
-
-            current.append(text)
-            last_end = word.end
-
-            duration = last_end - start
-
-            if len(current) >= max_words or duration >= max_duration:
-                groups.append(
-                    (start, last_end, " ".join(current))
-                )
-                current = []
-                start = None
-                last_end = None
-
-        if current and start is not None and last_end is not None:
-            groups.append(
-                (start, last_end, " ".join(current))
-            )
-
-    return groups
-
-def create_ass(groups, filename):
+def create_ass(chunks, filename):
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -89,14 +47,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     with open(filename, "w", encoding="utf-8") as f:
         f.write(header)
 
-        for start, end, text in groups:
+        for start, end, text in chunks:
+            text = text.strip()
             text = text.replace("\n", " ")
             text = text.replace("{", r"\{").replace("}", r"\}")
+
+            if not text:
+                continue
 
             f.write(
                 f"Dialogue: 0,{ass_time(start)},"
                 f"{ass_time(end)},Khmer,,0,0,0,,{text}\n"
             )
+
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
@@ -110,6 +73,7 @@ if video:
         "🚀 បង្កើត Caption ខ្មែរ",
         use_container_width=True
     ):
+
         with tempfile.TemporaryDirectory() as folder:
 
             input_file = os.path.join(folder, "input.mp4")
@@ -119,34 +83,66 @@ if video:
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
-            with st.spinner(
-                "🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."
-            ):
+            with st.spinner("🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."):
+
                 model = load_model()
 
-                segments, info = model.transcribe(
+                result = model(
                     input_file,
-                    language="km",
-                    task="transcribe",
-                    beam_size=5,
-                    vad_filter=True,
-                    word_timestamps=True,
-                    condition_on_previous_text=False
+                    return_timestamps=True,
+                    generate_kwargs={
+                        "language": "km",
+                        "task": "transcribe"
+                    }
                 )
 
-                segments = list(segments)
+            chunks = []
 
-            groups = make_caption_groups(
-                segments,
-                max_words=4,
-                max_duration=1.8
-            )
+            for chunk in result.get("chunks", []):
 
-            create_ass(groups, ass_file)
+                timestamp = chunk.get("timestamp")
+
+                if not timestamp:
+                    continue
+
+                start, end = timestamp
+
+                if start is None or end is None:
+                    continue
+
+                text = chunk.get("text", "").strip()
+
+                if not text:
+                    continue
+
+                # បែងចែកតាម ; ដែល Khmer v9 ផ្តល់ឱ្យ
+                parts = [
+                    p.strip()
+                    for p in text.split(";")
+                    if p.strip()
+                ]
+
+                if len(parts) == 1:
+                    chunks.append(
+                        (start, end, parts[0])
+                    )
+                else:
+                    duration = (end - start) / len(parts)
+
+                    for i, part in enumerate(parts):
+                        part_start = start + i * duration
+                        part_end = start + (i + 1) * duration
+
+                        chunks.append(
+                            (part_start, part_end, part)
+                        )
+
+            create_ass(chunks, ass_file)
 
             with st.spinner(
                 "🎬 កំពុងដាក់ Caption តាមសំឡេង..."
             ):
+
                 subprocess.run(
                     [
                         "ffmpeg",
