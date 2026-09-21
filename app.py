@@ -7,13 +7,12 @@ from faster_whisper import WhisperModel
 
 
 st.set_page_config(
-    page_title="Smey Auto Caption",
+    page_title="Smey Auto Caption FAST",
     page_icon="🎬",
-    layout="centered",
 )
 
-st.title("🇰🇭 Smey Auto Caption")
-st.write("បញ្ចូលវីដេអូ → Caption ខ្មែរ")
+st.title("🇰🇭 Smey Auto Caption FAST")
+st.write("វីដេអូ → Caption ខ្មែរ លឿន")
 
 
 @st.cache_resource(show_spinner=False)
@@ -50,24 +49,11 @@ def ass_time(seconds):
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
     cs = int((seconds - int(seconds)) * 100)
+
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def make_caption_groups(segments):
-    groups = []
-
-    for seg in segments:
-        text = seg.text.strip()
-
-        if text:
-            groups.append(
-                (seg.start, seg.end, text)
-            )
-
-    return groups
-
-
-def create_ass(groups, filename):
+def create_ass(segments, filename):
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -84,15 +70,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     with open(filename, "w", encoding="utf-8") as f:
         f.write(header)
 
-        for start, end, text in groups:
+        for seg in segments:
+            text = seg.text.strip()
+
+            if not text:
+                continue
+
             text = text.replace("\n", " ")
             text = text.replace("{", r"\{")
             text = text.replace("}", r"\}")
 
             f.write(
                 f"Dialogue: 0,"
-                f"{ass_time(start)},"
-                f"{ass_time(end)},"
+                f"{ass_time(seg.start)},"
+                f"{ass_time(seg.end)},"
                 f"Khmer,,0,0,0,,"
                 f"{text}\n"
             )
@@ -105,33 +96,36 @@ video = st.file_uploader(
 
 if video is not None:
 
-    if st.button("🚀 បង្កើត Caption", use_container_width=True):
+    if st.button("⚡ បង្កើត Caption លឿន", use_container_width=True):
 
-        with st.status("កំពុងបង្កើត Caption...", expanded=False):
+        with tempfile.TemporaryDirectory() as temp_dir:
 
-            model = load_model()
+            video_path = os.path.join(
+                temp_dir,
+                "input.mp4"
+            )
 
-            with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = os.path.join(
+                temp_dir,
+                "audio.wav"
+            )
 
-                video_path = os.path.join(
-                    temp_dir, "input.mp4"
-                )
+            ass_path = os.path.join(
+                temp_dir,
+                "caption.ass"
+            )
 
-                audio_path = os.path.join(
-                    temp_dir, "audio.wav"
-                )
+            with open(video_path, "wb") as f:
+                f.write(video.getbuffer())
 
-                ass_path = os.path.join(
-                    temp_dir, "caption.ass"
-                )
-
-                with open(video_path, "wb") as f:
-                    f.write(video.getbuffer())
+            with st.spinner("⚡ AI កំពុងស្តាប់..."):
 
                 extract_audio(
                     video_path,
                     audio_path
                 )
+
+                model = load_model()
 
                 segments, info = model.transcribe(
                     audio_path,
@@ -140,32 +134,28 @@ if video is not None:
                     best_of=1,
                     temperature=0,
                     word_timestamps=False,
-                    vad_filter=True,
+                    vad_filter=False,
+                    condition_on_previous_text=False,
                 )
 
                 segments = list(segments)
 
-                groups = make_caption_groups(
-                    segments
-                )
-
                 create_ass(
-                    groups,
+                    segments,
                     ass_path
                 )
 
-                with open(
-                    ass_path,
-                    "rb"
-                ) as f:
+            with open(
+                ass_path,
+                "rb"
+            ) as f:
+                caption_data = f.read()
 
-                    data = f.read()
-
-        st.success("✅ Caption រួចរាល់")
+        st.success("✅ រួចរាល់!")
 
         st.download_button(
             "⬇️ ទាញយក Caption",
-            data=data,
+            data=caption_data,
             file_name="khmer_caption.ass",
             mime="text/plain",
             use_container_width=True,
