@@ -5,12 +5,12 @@ import os
 from transformers import pipeline
 
 st.set_page_config(
-    page_title="Khmer Auto Caption",
+    page_title="Smey Auto Caption",
     page_icon="🎬"
 )
 
 st.title("🇰🇭 Smey Auto Caption")
-st.write("បញ្ចូលវីដេអូ → ស្តាប់សំឡេងខ្មែរ → បង្កើត Caption ខ្មែរ")
+st.write("បញ្ចូលវីដេអូ → ស្គាល់សំឡេងខ្មែរ → Caption តាមការនិយាយ")
 
 
 @st.cache_resource
@@ -18,8 +18,8 @@ def load_model():
     return pipeline(
         "automatic-speech-recognition",
         model="1morecupofhottea/whisper-turbo-khmer-v9",
-        device=-1,
-        chunk_length_s=30
+        chunk_length_s=30,
+        device=-1
     )
 
 
@@ -34,12 +34,8 @@ def ass_time(seconds):
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def make_caption_groups(chunks, max_words=4, max_duration=1.6):
-    groups = []
-
-    current_words = []
-    start_time = None
-    end_time = None
+def make_groups(chunks):
+    result = []
 
     for chunk in chunks:
 
@@ -54,40 +50,42 @@ def make_caption_groups(chunks, max_words=4, max_duration=1.6):
         if start is None or end is None:
             continue
 
-        if start_time is None:
-            start_time = start
+        # ម៉ូដែល Khmer v9 បំបែក word groups ដោយ ;
+        parts = [
+            x.strip()
+            for x in text.split(";")
+            if x.strip()
+        ]
 
-        current_words.append(text)
-        end_time = end
+        if not parts:
+            continue
 
-        duration = end_time - start_time
+        total = end - start
 
-        if (
-            len(current_words) >= max_words
-            or duration >= max_duration
-        ):
-            groups.append(
+        # បើមានតែមួយក្រុម
+        if len(parts) == 1:
+            result.append(
+                (start, end, parts[0])
+            )
+            continue
+
+        # បែងពេលវេលាតាមចំនួនក្រុម
+        step = total / len(parts)
+
+        for i, part in enumerate(parts):
+
+            part_start = start + (i * step)
+            part_end = start + ((i + 1) * step)
+
+            result.append(
                 (
-                    start_time,
-                    end_time,
-                    " ".join(current_words)
+                    part_start,
+                    part_end,
+                    part
                 )
             )
 
-            current_words = []
-            start_time = None
-            end_time = None
-
-    if current_words and start_time is not None and end_time is not None:
-        groups.append(
-            (
-                start_time,
-                end_time,
-                " ".join(current_words)
-            )
-        )
-
-    return groups
+    return result
 
 
 def create_ass(groups, filename):
@@ -121,22 +119,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             text = text.replace("}", r"\}")
 
             f.write(
-                f"Dialogue: 0,"
-                f"{ass_time(start)},"
-                f"{ass_time(end)},"
-                f"Khmer,,0,0,0,,"
-                f"{text}\n"
+                "Dialogue: 0,"
+                + ass_time(start)
+                + ","
+                + ass_time(end)
+                + ",Khmer,,0,0,0,,"
+                + text
+                + "\n"
             )
 
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
-    type=[
-        "mp4",
-        "mov",
-        "mkv",
-        "webm"
-    ]
+    type=["mp4", "mov", "mkv", "webm"]
 )
 
 
@@ -177,11 +172,7 @@ if video:
 
                 result = model(
                     input_file,
-                    return_timestamps="word",
-                    generate_kwargs={
-                        "language": "km",
-                        "task": "transcribe"
-                    }
+                    return_timestamps=True
                 )
 
             chunks = result.get(
@@ -189,13 +180,11 @@ if video:
                 []
             )
 
-            caption_groups = make_caption_groups(
-                chunks,
-                max_words=4,
-                max_duration=1.6
-            )
+            groups = make_groups(chunks)
 
-            if not caption_groups:
+            # បើ timestamp មិនបាន
+            # យក text ទាំងមូលជំនួស
+            if not groups:
 
                 full_text = result.get(
                     "text",
@@ -204,7 +193,7 @@ if video:
 
                 if full_text:
 
-                    caption_groups = [
+                    groups = [
                         (
                             0,
                             10,
@@ -212,22 +201,21 @@ if video:
                         )
                     ]
 
-            if not caption_groups:
+            if not groups:
 
                 st.error(
-                    "❌ មិនអាចស្គាល់សំឡេងបានទេ។ "
-                    "សូមសាកវីដេអូដែលនិយាយខ្មែរច្បាស់។"
+                    "❌ មិនអាចស្គាល់សំឡេងបានទេ។"
                 )
 
                 st.stop()
 
             create_ass(
-                caption_groups,
+                groups,
                 ass_file
             )
 
             with st.spinner(
-                "🎬 កំពុងដាក់ Caption តាមការនិយាយ..."
+                "🎬 កំពុងដាក់ Caption..."
             ):
 
                 subprocess.run(
@@ -241,7 +229,7 @@ if video:
                         "-c:v",
                         "libx264",
                         "-preset",
-                        "medium",
+                        "veryfast",
                         "-c:a",
                         "aac",
                         output_file
@@ -259,9 +247,9 @@ if video:
             ) as f:
 
                 st.download_button(
-                    "⬇️ ទាញយកវីដេអូមាន Caption ខ្មែរ",
+                    "⬇️ ទាញយកវីដេអូមាន Caption",
                     f,
                     file_name="khmer_caption.mp4",
                     mime="video/mp4",
                     use_container_width=True
-        )
+                )
