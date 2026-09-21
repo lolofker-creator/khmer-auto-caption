@@ -6,11 +6,12 @@ from transformers import pipeline
 
 st.set_page_config(
     page_title="Smey Auto Caption",
-    page_icon="🎬"
+    page_icon="🇰🇭"
 )
 
 st.title("🇰🇭 Smey Auto Caption")
 st.write("បញ្ចូលវីដេអូ → ស្គាល់សំឡេងខ្មែរ → Caption តាមការនិយាយ")
+
 
 @st.cache_resource
 def load_model():
@@ -48,7 +49,6 @@ def make_groups(chunks):
         if start is None or end is None:
             continue
 
-        # Khmer v9 ប្រើ ; ដើម្បីបែងចែក word groups
         parts = [
             x.strip()
             for x in text.split(";")
@@ -60,14 +60,12 @@ def make_groups(chunks):
 
         duration = end - start
 
-        # បើមានតែ ១ ក្រុម
         if len(parts) == 1:
             groups.append(
                 (start, end, parts[0])
             )
             continue
 
-        # បែងពេលវេលាឱ្យក្រុមនីមួយៗ
         step = duration / len(parts)
 
         for i, part in enumerate(parts):
@@ -75,11 +73,7 @@ def make_groups(chunks):
             part_end = start + ((i + 1) * step)
 
             groups.append(
-                (
-                    part_start,
-                    part_end,
-                    part
-                )
+                (part_start, part_end, part)
             )
 
     return groups
@@ -101,7 +95,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     with open(filename, "w", encoding="utf-8") as f:
-
         f.write(header)
 
         for start, end, text in groups:
@@ -128,12 +121,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
-    type=[
-        "mp4",
-        "mov",
-        "mkv",
-        "webm"
-    ]
+    type=["mp4", "mov", "mkv", "webm"]
 )
 
 
@@ -153,6 +141,11 @@ if video:
                 "input.mp4"
             )
 
+            audio_file = os.path.join(
+                folder,
+                "audio.wav"
+            )
+
             ass_file = os.path.join(
                 folder,
                 "caption.ass"
@@ -163,18 +156,40 @@ if video:
                 "output.mp4"
             )
 
+            # Save video
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
-            # ស្គាល់សំឡេង
-            with st.spinner(
-                "🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."
-            ):
+            # Extract audio from video
+            with st.spinner("🔊 កំពុងដកសំឡេងពីវីដេអូ..."):
+
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        input_file,
+                        "-vn",
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "16000",
+                        "-c:a",
+                        "pcm_s16le",
+                        audio_file
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE
+                )
+
+            # Speech recognition
+            with st.spinner("🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."):
 
                 model = load_model()
 
                 result = model(
-                    input_file,
+                    audio_file,
                     return_timestamps=True
                 )
 
@@ -183,79 +198,21 @@ if video:
                 []
             )
 
-            groups = make_groups(
-                chunks
-            )
-
-            # បើមិនមាន timestamp
-            if not groups:
-
-                full_text = result.get(
-                    "text",
-                    ""
-                ).strip()
-
-                if full_text:
-
-                    groups = [
-                        (
-                            0,
-                            10,
-                            full_text
-                        )
-                    ]
+            groups = make_groups(chunks)
 
             if not groups:
-
                 st.error(
-                    "❌ មិនអាចស្គាល់សំឡេងបានទេ។"
+                    "❌ AI មិនអាចរកពេលវេលាសំឡេងបានទេ។"
                 )
-
                 st.stop()
 
-            # បង្កើត ASS
+            # Create subtitles
             create_ass(
                 groups,
                 ass_file
             )
 
-            # ដាក់ Caption ចូលវីដេអូ
-            with st.spinner(
-                "🎬 កំពុងដាក់ Caption..."
-            ):
+            # Burn subtitles into video
+            with st.spinner("🎬 កំពុងដាក់ Caption..."):
 
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        input_file,
-                        "-vf",
-                        f"ass={ass_file}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "veryfast",
-                        "-c:a",
-                        "aac",
-                        output_file
-                    ],
-                    check=True
-                )
-
-            st.success(
-                "✅ រួចរាល់!"
-            )
-
-            with open(
-                output_file,
-                "rb"
-            ) as f:
-
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូមាន Caption",
-                    f,
-                    file_name="khmer_caption.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-            )
+                subprocess
