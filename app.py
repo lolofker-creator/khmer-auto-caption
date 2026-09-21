@@ -12,7 +12,6 @@ st.set_page_config(
 st.title("🇰🇭 Smey Auto Caption")
 st.write("បញ្ចូលវីដេអូ → ស្គាល់សំឡេងខ្មែរ → Caption តាមការនិយាយ")
 
-
 @st.cache_resource
 def load_model():
     return pipeline(
@@ -35,10 +34,9 @@ def ass_time(seconds):
 
 
 def make_groups(chunks):
-    result = []
+    groups = []
 
     for chunk in chunks:
-
         timestamp = chunk.get("timestamp")
         text = chunk.get("text", "").strip()
 
@@ -50,7 +48,7 @@ def make_groups(chunks):
         if start is None or end is None:
             continue
 
-        # ម៉ូដែល Khmer v9 បំបែក word groups ដោយ ;
+        # Khmer v9 ប្រើ ; ដើម្បីបែងចែក word groups
         parts = [
             x.strip()
             for x in text.split(";")
@@ -60,24 +58,23 @@ def make_groups(chunks):
         if not parts:
             continue
 
-        total = end - start
+        duration = end - start
 
-        # បើមានតែមួយក្រុម
+        # បើមានតែ ១ ក្រុម
         if len(parts) == 1:
-            result.append(
+            groups.append(
                 (start, end, parts[0])
             )
             continue
 
-        # បែងពេលវេលាតាមចំនួនក្រុម
-        step = total / len(parts)
+        # បែងពេលវេលាឱ្យក្រុមនីមួយៗ
+        step = duration / len(parts)
 
         for i, part in enumerate(parts):
-
             part_start = start + (i * step)
             part_end = start + ((i + 1) * step)
 
-            result.append(
+            groups.append(
                 (
                     part_start,
                     part_end,
@@ -85,7 +82,7 @@ def make_groups(chunks):
                 )
             )
 
-    return result
+    return groups
 
 
 def create_ass(groups, filename):
@@ -131,7 +128,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
-    type=["mp4", "mov", "mkv", "webm"]
+    type=[
+        "mp4",
+        "mov",
+        "mkv",
+        "webm"
+    ]
 )
 
 
@@ -164,6 +166,7 @@ if video:
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
+            # ស្គាល់សំឡេង
             with st.spinner(
                 "🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."
             ):
@@ -180,10 +183,11 @@ if video:
                 []
             )
 
-            groups = make_groups(chunks)
+            groups = make_groups(
+                chunks
+            )
 
-            # បើ timestamp មិនបាន
-            # យក text ទាំងមូលជំនួស
+            # បើមិនមាន timestamp
             if not groups:
 
                 full_text = result.get(
@@ -209,11 +213,13 @@ if video:
 
                 st.stop()
 
+            # បង្កើត ASS
             create_ass(
                 groups,
                 ass_file
             )
 
+            # ដាក់ Caption ចូលវីដេអូ
             with st.spinner(
                 "🎬 កំពុងដាក់ Caption..."
             ):
@@ -252,4 +258,4 @@ if video:
                     file_name="khmer_caption.mp4",
                     mime="video/mp4",
                     use_container_width=True
-                )
+            )
