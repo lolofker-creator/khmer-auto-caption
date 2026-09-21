@@ -10,15 +10,11 @@ st.set_page_config(
 )
 
 st.title("🇰🇭 Khmer Auto Caption")
-st.write("បញ្ចូលវីដេអូ → Caption ខ្មែរ តាមសំឡេង")
+st.write("បញ្ចូលវីដេអូ → បង្កើត Caption ខ្មែរ ស្វ័យប្រវត្តិ")
 
 @st.cache_resource
 def load_model():
-    return WhisperModel(
-        "PhanithLIM/whisper-small-khmer-ct2",
-        device="cpu",
-        compute_type="int8"
-    )
+    return WhisperModel("small", device="cpu", compute_type="int8")
 
 def ass_time(seconds):
     h = int(seconds // 3600)
@@ -26,47 +22,7 @@ def ass_time(seconds):
     s = seconds % 60
     return f"{h}:{m:02d}:{s:05.2f}"
 
-def make_caption_groups(segments, max_words=4, max_duration=1.8):
-    groups = []
-
-    for seg in segments:
-        words = getattr(seg, "words", None)
-
-        if not words:
-            text = seg.text.strip()
-            if text:
-                groups.append((seg.start, seg.end, text))
-            continue
-
-        current = []
-        start = None
-        last_end = None
-
-        for w in words:
-            text = (w.word or "").strip()
-            if not text:
-                continue
-
-            if start is None:
-                start = w.start
-
-            current.append(text)
-            last_end = w.end
-
-            duration = last_end - start
-
-            if len(current) >= max_words or duration >= max_duration:
-                groups.append((start, last_end, " ".join(current)))
-                current = []
-                start = None
-                last_end = None
-
-        if current and start is not None and last_end is not None:
-            groups.append((start, last_end, " ".join(current)))
-
-    return groups
-
-def create_ass(groups, filename):
+def create_ass(segments, filename):
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -82,14 +38,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(header)
-
-        for start, end, text in groups:
+        for seg in segments:
+            text = seg.text.strip()
             text = text.replace("\n", " ")
             text = text.replace("{", r"\{").replace("}", r"\}")
-
             f.write(
-                f"Dialogue: 0,{ass_time(start)},{ass_time(end)},"
-                f"Khmer,,0,0,0,,{text}\n"
+                f"Dialogue: 0,{ass_time(seg.start)},"
+                f"{ass_time(seg.end)},Khmer,,0,0,0,,{text}\n"
             )
 
 video = st.file_uploader(
@@ -101,9 +56,7 @@ if video:
     st.video(video)
 
     if st.button("🚀 បង្កើត Caption ខ្មែរ", use_container_width=True):
-
         with tempfile.TemporaryDirectory() as folder:
-
             input_file = os.path.join(folder, "input.mp4")
             ass_file = os.path.join(folder, "caption.ass")
             output_file = os.path.join(folder, "output.mp4")
@@ -111,30 +64,19 @@ if video:
             with open(input_file, "wb") as f:
                 f.write(video.getbuffer())
 
-            with st.spinner("🎙️ កំពុងស្តាប់សំឡេង និងកំណត់ពេល Caption..."):
-
+            with st.spinner("🎙️ កំពុងស្តាប់ និងបម្លែងសំឡេងជាអក្សរខ្មែរ..."):
                 model = load_model()
-
                 segments, info = model.transcribe(
                     input_file,
                     language="km",
                     beam_size=5,
-                    vad_filter=True,
-                    word_timestamps=True
+                    vad_filter=True
                 )
-
                 segments = list(segments)
 
-            groups = make_caption_groups(
-                segments,
-                max_words=4,
-                max_duration=1.8
-            )
+            create_ass(segments, ass_file)
 
-            create_ass(groups, ass_file)
-
-            with st.spinner("🎬 កំពុងដាក់ Caption តាមសំឡេង..."):
-
+            with st.spinner("🎬 កំពុងដាក់ Caption លើវីដេអូ..."):
                 subprocess.run(
                     [
                         "ffmpeg",
@@ -155,7 +97,6 @@ if video:
                 )
 
             st.success("✅ រួចរាល់!")
-
             with open(output_file, "rb") as f:
                 st.download_button(
                     "⬇️ ទាញយកវីដេអូមាន Caption",
@@ -164,4 +105,3 @@ if video:
                     mime="video/mp4",
                     use_container_width=True
                 )
-                
