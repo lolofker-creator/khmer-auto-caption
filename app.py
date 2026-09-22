@@ -10,7 +10,7 @@ from google import genai
 from google.genai import types
 import imageio_ffmpeg
 import urllib.request
-
+import json
 
 st.set_page_config(
     page_title="Smey Auto Caption",
