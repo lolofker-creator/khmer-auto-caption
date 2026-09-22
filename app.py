@@ -496,24 +496,21 @@ Each segment must have exactly these fields:
 Make short natural caption segments, about 2 seconds each.
 Do not translate. Do not add explanations or markdown.
 """
-
-                    response = client.models.generate_content(
-                        model="gemini-3.5-flash",
-                        contents=[
-                            types.Part.from_uri(
-                                file_uri=audio_file.uri,
-                                mime_type=audio_file.mime_type,
-                            ),
-                            timestamp_prompt,
-                        ],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=list[dict[str, object]],
-                        ),
+response = client.models.generate_content(
+    model="gemini-3.8-flash",
+    contents=[
+        types.Part.from_uri(
+            file_uri=audio_file.uri,
+            mime_type=audio_file.mime_type,
+        ),
+        timestamp_prompt,
+    ],
+    config=types.GenerateContentConfig(
+        response_mime_type="application/json",
+    ),
                     )
 
-                    raw_segments = response.parsed
-                    groups = []
+                   raw_segments = json.loads(response.text)
 
                     if isinstance(raw_segments, list):
                         for item in raw_segments:
