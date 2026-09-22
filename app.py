@@ -739,10 +739,17 @@ video = st.file_uploader(
 
 if video is not None:
 
-    if st.button(
-        "⚡ បង្កើត Caption",
-        use_container_width=True
-    ):
+ caption_clicked = st.button(
+    "⚡ បង្កើត Caption",
+    use_container_width=True
+)
+
+dubbing_clicked = st.button(
+    "🎙️ AI Dubbing",
+    use_container_width=True
+)
+
+if caption_clicked or dubbing_clicked:
 
         with tempfile.TemporaryDirectory() as temp_dir:
 
