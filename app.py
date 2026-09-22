@@ -18,11 +18,13 @@ st.set_page_config(
 # Logo
 # =========================================================
 
-st.image(
-    "file_00000000568c8211831d7859c11ddf61.png",
-    use_container_width=True,
-)
+col1, col2, col3 = st.columns([1, 2, 1])
 
+with col2:
+    st.image(
+        "file_00000000568c8211831d7859c11ddf61.png",
+        width=300,
+    )
 st.title("🇰🇭 Smey Auto Caption")
 st.write("Gemini → Caption → Auto Translate → MP4")
 
