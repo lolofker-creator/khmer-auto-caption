@@ -1255,4 +1255,131 @@ if video is not None:
                 )
 
                 st.exception(e)
+                                        st.error(
+                            "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
+                        )
+
+                        st.stop()
+
+
+                # -------------------------
+                # Translation
+                # -------------------------
+
+                if target_language != "មិនបកប្រែ":
+
+                    with st.spinner(
+                        "🌐 Gemini កំពុងបកប្រែ Caption..."
+                    ):
+
+                        groups = translate_captions(
+                            client,
+                            groups,
+                            source_language,
+                            target_language,
+                        )
+
+
+                # -------------------------
+                # Create ASS
+                # -------------------------
+
+                create_ass(
+                    groups,
+                    ass_path
+                )
+
+
+                # -------------------------
+                # Burn Caption
+                # -------------------------
+
+                with st.spinner(
+                    "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
+                ):
+
+                    burn_caption(
+                        video_path,
+                        ass_path,
+                        caption_video_path
+                    )
+
+
+                # -------------------------
+                # AI Dubbing
+                # -------------------------
+
+                if enable_dubbing:
+
+                    with st.spinner(
+                        "🎙️ Gemini កំពុងបង្កើតសំឡេង AI..."
+                    ):
+
+                        voice_name = TTS_VOICES[
+                            voice_label
+                        ]
+
+                        create_dubbing_audio(
+                            client,
+                            groups,
+                            dubbed_audio_path,
+                            temp_dir,
+                            voice_name,
+                            dubbing_language,
+                        )
+
+                    with st.spinner(
+                        "🔊 កំពុងដាក់សំឡេង AI ជំនួសសំឡេងដើម..."
+                    ):
+
+                        replace_audio(
+                            caption_video_path,
+                            dubbed_audio_path,
+                            output_path,
+                        )
+
+                else:
+
+                    os.replace(
+                        caption_video_path,
+                        output_path
+                    )
+
+
+                # -------------------------
+                # Output
+                # -------------------------
+
+                with open(
+                    output_path,
+                    "rb"
+                ) as f:
+
+                    output_data = f.read()
+
+                st.success(
+                    "✅ វីដេអូរួចរាល់!"
+                )
+
+                st.video(
+                    output_data
+                )
+
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូ MP4",
+                    data=output_data,
+                    file_name="smey_auto_caption.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
+                    on_click="ignore",
+                )
+
+
+            except Exception as e:
+
+                st.error(
+                    "❌ មានបញ្ហាពេលបង្កើតវីដេអូ"
+                )
+
+                st.exception(e)
                    
