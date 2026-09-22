@@ -4,13 +4,13 @@ import subprocess
 import tempfile
 import wave
 import time
+import json
+import urllib.request
 
 import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-import urllib.request
-import json
 
 st.set_page_config(
     page_title="Smey Auto Caption",
@@ -26,9 +26,7 @@ st.write("Gemini → Caption → Auto Translate → AI Dubbing → MP4")
 # =========================================================
 
 def run_ffmpeg(args):
-
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-
     subprocess.run(
         [ffmpeg] + args,
         stdout=subprocess.DEVNULL,
@@ -38,7 +36,6 @@ def run_ffmpeg(args):
 
 
 def extract_audio(video_path, audio_path):
-
     run_ffmpeg([
         "-y",
         "-i", video_path,
@@ -55,7 +52,6 @@ def extract_audio(video_path, audio_path):
 # =========================================================
 
 def to_seconds(value):
-
     if not value:
         return 0.0
 
@@ -68,14 +64,11 @@ def to_seconds(value):
 
 
 def ass_time(seconds):
-
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
 
-    cs = int(
-        (seconds - int(seconds)) * 100
-    )
+    cs = int((seconds - int(seconds)) * 100)
 
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
@@ -85,25 +78,12 @@ def ass_time(seconds):
 # =========================================================
 
 def get_words(interaction):
-
     words = []
 
-    for step in getattr(
-        interaction,
-        "steps",
-        []
-    ) or []:
-
-        for content in getattr(
-            step,
-            "content",
-            []
-        ) or []:
-
+    for step in getattr(interaction, "steps", []) or []:
+        for content in getattr(step, "content", []) or []:
             for annotation in getattr(
-                content,
-                "annotations",
-                []
+                content, "annotations", []
             ) or []:
 
                 if getattr(
@@ -111,7 +91,6 @@ def get_words(interaction):
                     "type",
                     None
                 ) == "word_info":
-
                     words.append(annotation)
 
     return words
@@ -126,7 +105,6 @@ def make_groups(
     max_words=5,
     max_duration=2.0
 ):
-
     groups = []
 
     current = []
@@ -134,13 +112,8 @@ def make_groups(
     last_end = None
 
     for word in words:
-
         text = (
-            getattr(
-                word,
-                "text",
-                ""
-            )
+            getattr(word, "text", "")
             or ""
         ).strip()
 
@@ -148,19 +121,11 @@ def make_groups(
             continue
 
         word_start = to_seconds(
-            getattr(
-                word,
-                "start_offset",
-                ""
-            )
+            getattr(word, "start_offset", "")
         )
 
         word_end = to_seconds(
-            getattr(
-                word,
-                "end_offset",
-                ""
-            )
+            getattr(word, "end_offset", "")
         )
 
         if start is None:
@@ -173,7 +138,6 @@ def make_groups(
             len(current) >= max_words
             or last_end - start >= max_duration
         ):
-
             groups.append({
                 "start": start,
                 "end": last_end,
@@ -185,7 +149,6 @@ def make_groups(
             last_end = None
 
     if current and start is not None:
-
         groups.append({
             "start": start,
             "end": last_end,
@@ -205,7 +168,6 @@ def translate_captions(
     source_language,
     target_language
 ):
-
     if not groups:
         return groups
 
@@ -268,11 +230,7 @@ IMPORTANT RULES:
 Captions:
 """
 
-    for i, text in enumerate(
-        texts,
-        start=1
-    ):
-
+    for i, text in enumerate(texts, start=1):
         prompt += f"\n{i}. {text}"
 
     response = client.models.generate_content(
@@ -290,7 +248,6 @@ Captions:
         return groups
 
     if len(translated) != len(groups):
-
         raise ValueError(
             "Gemini បានបកប្រែចំនួន Caption មិនត្រូវគ្នា។"
         )
@@ -301,7 +258,6 @@ Captions:
         groups,
         translated
     ):
-
         new_groups.append({
             "start": group["start"],
             "end": group["end"],
@@ -331,7 +287,6 @@ TTS_VOICES = {
 
 
 def get_tts_language(language):
-
     return {
         "🇬🇧 English": "English",
         "🇨🇳 中文": "Chinese Mandarin",
@@ -344,6 +299,50 @@ def get_tts_language(language):
     )
 
 
+def generate_doslarb_tts_wav(text, output_path):
+    api_key = st.secrets["DOSLARB_API_KEY"]
+
+    data = json.dumps({
+        "text": text,
+        "voice": "sovann",
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "https://doslarb.cloud/api/v1/tts",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=60
+    ) as response:
+        mp3_data = response.read()
+
+    mp3_path = output_path.replace(
+        ".wav",
+        ".mp3"
+    )
+
+    with open(mp3_path, "wb") as f:
+        f.write(mp3_data)
+
+    run_ffmpeg([
+        "-y",
+        "-i", mp3_path,
+        "-ar", "24000",
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        output_path,
+    ])
+
+    os.remove(mp3_path)
+
+
 def generate_tts_wav(
     client,
     text,
@@ -351,6 +350,12 @@ def generate_tts_wav(
     voice_name,
     language,
 ):
+    if language == "🇰🇭 ខ្មែរ":
+        generate_doslarb_tts_wav(
+            text,
+            output_path
+        )
+        return
 
     language_name = get_tts_language(
         language
@@ -401,7 +406,6 @@ TRANSCRIPT:
         output_path,
         "wb"
     ) as wf:
-
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(24000)
@@ -416,9 +420,7 @@ def create_dubbing_audio(
     voice_name,
     dubbing_language,
 ):
-
     if not groups:
-
         raise ValueError(
             "មិនមាន Caption សម្រាប់ AI Dubbing ទេ។"
         )
@@ -426,7 +428,6 @@ def create_dubbing_audio(
     clip_paths = []
 
     for index, group in enumerate(groups):
-
         text = str(
             group["text"]
         ).strip()
@@ -455,7 +456,6 @@ def create_dubbing_audio(
         )
 
     if not clip_paths:
-
         raise ValueError(
             "មិនអាចបង្កើតសំឡេង AI បានទេ។"
         )
@@ -506,22 +506,16 @@ def create_dubbing_audio(
         + [
             "-filter_complex",
             ";".join(filters),
-
             "-map",
             "[out]",
-
             "-ar",
             "48000",
-
             "-ac",
             "2",
-
             "-c:a",
             "aac",
-
             "-b:a",
             "192k",
-
             "-y",
             output_path,
         ]
@@ -533,36 +527,25 @@ def replace_audio(
     dubbed_audio_path,
     output_path
 ):
-
     run_ffmpeg([
         "-y",
-
         "-i",
         video_path,
-
         "-i",
         dubbed_audio_path,
-
         "-map",
         "0:v:0",
-
         "-map",
         "1:a:0",
-
         "-c:v",
         "copy",
-
         "-c:a",
         "aac",
-
         "-b:a",
         "192k",
-
         "-shortest",
-
         "-movflags",
         "+faststart",
-
         output_path,
     ])
 
@@ -575,7 +558,6 @@ def create_ass(
     groups,
     filename
 ):
-
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -594,11 +576,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         "w",
         encoding="utf-8"
     ) as f:
-
         f.write(header)
 
         for group in groups:
-
             text = group["text"]
 
             text = text.replace(
@@ -634,7 +614,6 @@ def burn_caption(
     ass_path,
     output_path
 ):
-
     escaped_ass = (
         ass_path
         .replace("\\", "/")
@@ -644,31 +623,22 @@ def burn_caption(
 
     run_ffmpeg([
         "-y",
-
         "-i",
         video_path,
-
         "-vf",
         f"ass='{escaped_ass}'",
-
         "-c:v",
         "libx264",
-
         "-preset",
         "veryfast",
-
         "-crf",
         "23",
-
         "-c:a",
         "aac",
-
         "-b:a",
         "128k",
-
         "-movflags",
         "+faststart",
-
         output_path,
     ])
 
@@ -689,7 +659,6 @@ source_language = st.selectbox(
         "🇯🇵 日本語",
     ],
 )
-
 
 target_language = st.selectbox(
     "🎯 បកប្រែទៅជា",
@@ -718,6 +687,7 @@ enable_dubbing = st.checkbox(
 dubbing_language = st.selectbox(
     "🗣️ ភាសាសំឡេង AI",
     [
+        "🇰🇭 ខ្មែរ",
         "🇬🇧 English",
         "🇨🇳 中文",
         "🇻🇳 Tiếng Việt",
@@ -730,15 +700,22 @@ dubbing_language = st.selectbox(
 voice_label = st.selectbox(
     "🎤 សម្លេង AI",
     list(TTS_VOICES.keys()),
-    disabled=not enable_dubbing,
+    disabled=(
+        not enable_dubbing
+        or dubbing_language == "🇰🇭 ខ្មែរ"
+    ),
 )
 
 if enable_dubbing:
-
     st.info(
         "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
         "ហើយជំនួសសំឡេងដើម។"
     )
+
+    if dubbing_language == "🇰🇭 ខ្មែរ":
+        st.caption(
+            "🇰🇭 សំឡេងខ្មែរ ប្រើ Doslarb — Sovann"
+        )
 
 
 # =========================================================
@@ -803,7 +780,6 @@ if video is not None:
                 video_path,
                 "wb"
             ) as f:
-
                 f.write(
                     video.getbuffer()
                 )
@@ -817,7 +793,6 @@ if video is not None:
                 with st.spinner(
                     "⚡ កំពុងដកសំឡេង..."
                 ):
-
                     extract_audio(
                         video_path,
                         audio_path
@@ -854,7 +829,6 @@ if video is not None:
                     }
 
                     if source_language != "Auto Detect":
-
                         language_codes = [
                             language_code_map[
                                 source_language
@@ -894,11 +868,9 @@ if video is not None:
                     )
 
                     if not groups:
-
                         st.error(
                             "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
                         )
-
                         st.stop()
 
 
@@ -911,7 +883,6 @@ if video is not None:
                     with st.spinner(
                         "🌐 Gemini កំពុងបកប្រែ Caption..."
                     ):
-
                         groups = translate_captions(
                             client,
                             groups,
@@ -937,7 +908,6 @@ if video is not None:
                 with st.spinner(
                     "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
                 ):
-
                     burn_caption(
                         video_path,
                         ass_path,
@@ -951,31 +921,31 @@ if video is not None:
 
                 if enable_dubbing:
 
-                    # AI Dubbing ត្រូវការអត្ថបទ
-                    # ជាភាសាដែលត្រូវនិយាយ។
-                    # បើ Auto Translate មិនបានបើក
-                    # វីដេអូនឹងប្រើអត្ថបទដើម។
-
-                    if (
-                        target_language
-                        == "មិនបកប្រែ"
-                    ):
-
+                    if target_language == "មិនបកប្រែ":
                         st.warning(
                             "⚠️ សម្រាប់ AI Dubbing "
                             "សូមជ្រើសភាសានៅ 'បកប្រែទៅជា' "
                             "ឱ្យដូចភាសាសំឡេង AI។"
-                                                    )
+                        )
+
+                    elif target_language != dubbing_language:
+                        st.warning(
+                            "⚠️ 'បកប្រែទៅជា' និង "
+                            "'ភាសាសំឡេង AI' ត្រូវជ្រើសភាសាដូចគ្នា។"
+                        )
 
                     else:
 
                         with st.spinner(
-                            "🎙️ Gemini កំពុងបង្កើតសំឡេង AI..."
+                            "🎙️ កំពុងបង្កើតសំឡេង AI..."
                         ):
 
-                            voice_name = TTS_VOICES[
-                                voice_label
-                            ]
+                            if dubbing_language == "🇰🇭 ខ្មែរ":
+                                voice_name = "Sovann"
+                            else:
+                                voice_name = TTS_VOICES[
+                                    voice_label
+                                ]
 
                             create_dubbing_audio(
                                 client,
@@ -989,7 +959,6 @@ if video is not None:
                         with st.spinner(
                             "🔊 កំពុងដាក់សំឡេង AI..."
                         ):
-
                             replace_audio(
                                 caption_video_path,
                                 dubbed_audio_path,
@@ -999,8 +968,8 @@ if video is not None:
                 if (
                     not enable_dubbing
                     or target_language == "មិនបកប្រែ"
+                    or target_language != dubbing_language
                 ):
-
                     os.replace(
                         caption_video_path,
                         output_path
@@ -1014,7 +983,6 @@ if video is not None:
                     output_path,
                     "rb"
                 ) as f:
-
                     output_data = f.read()
 
                 st.success(
@@ -1041,4 +1009,3 @@ if video is not None:
                 )
 
                 st.exception(e)
-  
