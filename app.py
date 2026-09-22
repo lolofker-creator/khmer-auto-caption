@@ -9,6 +9,7 @@ import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
+import urllib.request
 
 
 st.set_page_config(
