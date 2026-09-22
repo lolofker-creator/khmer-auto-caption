@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import base64
 
 import streamlit as st
 from google import genai
@@ -66,7 +67,9 @@ def get_words(interaction):
     for step in getattr(interaction, "steps", []) or []:
         for content in getattr(step, "content", []) or []:
             for annotation in getattr(
-                content, "annotations", []
+                content,
+                "annotations",
+                []
             ) or []:
 
                 if getattr(
@@ -207,7 +210,6 @@ def burn_caption(
     output_path
 ):
 
-    # Escape the ASS path for FFmpeg filter syntax
     escaped_ass = (
         ass_path
         .replace("\\", "/")
@@ -227,6 +229,36 @@ def burn_caption(
         "-movflags", "+faststart",
         output_path,
     ])
+
+
+def show_download_link(video_data):
+
+    encoded = base64.b64encode(
+        video_data
+    ).decode("utf-8")
+
+    html = f"""
+    <div style="text-align:center; margin-top:15px;">
+        <a
+            href="data:video/mp4;base64,{encoded}"
+            download="smey_auto_caption.mp4"
+            style="
+                display:inline-block;
+                padding:14px 24px;
+                background:#ff4b4b;
+                color:white;
+                text-decoration:none;
+                border-radius:10px;
+                font-size:18px;
+                font-weight:bold;
+            "
+        >
+            ⬇️ ទាញយកវីដេអូ MP4
+        </a>
+    </div>
+    """
+
+    st.html(html)
 
 
 video = st.file_uploader(
@@ -371,12 +403,8 @@ if video is not None:
                     output_data
                 )
 
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូ MP4",
-                    data=output_data,
-                    file_name="smey_auto_caption.mp4",
-                    mime="video/mp4",
-                    use_container_width=True,
+                show_download_link(
+                    output_data
                 )
 
             except Exception as e:
