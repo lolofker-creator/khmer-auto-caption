@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import json
 
 import streamlit as st
 from google import genai
@@ -473,37 +474,66 @@ if video is not None:
                             ]
                         ]
 
-                    interaction = client.interactions.create(
-                        model="gemini-3.5-transcribe",
-                        input=[
-                            {
-                                "type": "audio",
-                                "uri": audio_file.uri,
-                                "mime_type": audio_file.mime_type,
-                            }
+                    # Gemini 3.8 Flash does not expose the dedicated
+                    # word-timestamp transcription API. Instead, ask it
+                    # to return caption segments with estimated timestamps.
+                    language_hint = (
+                        language_codes[0]
+                        if language_codes
+                        else "detect automatically"
+                    )
+
+                    timestamp_prompt = f"""
+Transcribe this audio accurately.
+Language: {language_hint}
+
+Return ONLY valid JSON: an array of caption segments.
+Each segment must have exactly these fields:
+- start: number of seconds from the beginning
+- end: number of seconds from the beginning
+- text: the exact spoken words for that segment
+
+Make short natural caption segments, about 2 seconds each.
+Do not translate. Do not add explanations or markdown.
+"""
+
+                    response = client.models.generate_content(
+                        model="gemini-3.8-flash",
+                        contents=[
+                            types.Part.from_uri(
+                                file_uri=audio_file.uri,
+                                mime_type=audio_file.mime_type,
+                            ),
+                            timestamp_prompt,
                         ],
-                        generation_config={
-                            "transcription_config": {
-                                "language_codes": language_codes,
-                                "mode": {
-                                    "type": "verbatim",
-                                    "timestamp_granularities": [
-                                        "word"
-                                    ],
-                                },
-                            }
-                        },
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=list[dict[str, object]],
+                        ),
                     )
 
-                    words = get_words(
-                        interaction
-                    )
+                    raw_segments = response.parsed
+                    groups = []
 
-                    groups = make_groups(
-                        words,
-                        max_words=5,
-                        max_duration=2.0,
-                    )
+                    if isinstance(raw_segments, list):
+                        for item in raw_segments:
+                            if not isinstance(item, dict):
+                                continue
+                            text = str(item.get("text", "")).strip()
+                            if not text:
+                                continue
+                            try:
+                                start = float(item.get("start", 0))
+                                end = float(item.get("end", start + 2))
+                            except (TypeError, ValueError):
+                                continue
+                            if end <= start:
+                                end = start + 2
+                            groups.append({
+                                "start": start,
+                                "end": end,
+                                "text": text,
+                            })
 
                     if not groups:
                         st.error(
