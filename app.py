@@ -2,6 +2,8 @@ import os
 import base64
 import subprocess
 import tempfile
+import wave
+import time
 
 import streamlit as st
 from google import genai
@@ -15,7 +17,7 @@ st.set_page_config(
 )
 
 st.title("🇰🇭 Smey Auto Caption")
-st.write("Gemini → Caption → Auto Translate → MP4")
+st.write("Gemini → Caption → Auto Translate → AI Dubbing → MP4")
 
 
 # =========================
@@ -23,6 +25,7 @@ st.write("Gemini → Caption → Auto Translate → MP4")
 # =========================
 
 def run_ffmpeg(args):
+
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
@@ -33,7 +36,10 @@ def run_ffmpeg(args):
     )
 
 
-def extract_audio(video_path, audio_path):
+def extract_audio(
+    video_path,
+    audio_path
+):
 
     run_ffmpeg([
         "-y",
@@ -69,6 +75,7 @@ def ass_time(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
+
     cs = int(
         (seconds - int(seconds)) * 100
     )
@@ -219,22 +226,48 @@ def translate_captions(
         return groups
 
     source_map = {
-        "Auto Detect": "the original language",
-        "🇰🇭 ខ្មែរ": "Khmer",
-        "🇬🇧 English": "English",
-        "🇨🇳 中文": "Chinese",
-        "🇻🇳 Tiếng Việt": "Vietnamese",
-        "🇰🇷 한국어": "Korean",
-        "🇯🇵 日本語": "Japanese",
+
+        "Auto Detect":
+            "the original language",
+
+        "🇰🇭 ខ្មែរ":
+            "Khmer",
+
+        "🇬🇧 English":
+            "English",
+
+        "🇨🇳 中文":
+            "Chinese",
+
+        "🇻🇳 Tiếng Việt":
+            "Vietnamese",
+
+        "🇰🇷 한국어":
+            "Korean",
+
+        "🇯🇵 日本語":
+            "Japanese",
     }
 
     target_map = {
-        "🇰🇭 ខ្មែរ": "Khmer",
-        "🇬🇧 English": "English",
-        "🇨🇳 中文": "Chinese",
-        "🇻🇳 Tiếng Việt": "Vietnamese",
-        "🇰🇷 한국어": "Korean",
-        "🇯🇵 日本語": "Japanese",
+
+        "🇰🇭 ខ្មែរ":
+            "Khmer",
+
+        "🇬🇧 English":
+            "English",
+
+        "🇨🇳 中文":
+            "Chinese",
+
+        "🇻🇳 Tiếng Việt":
+            "Vietnamese",
+
+        "🇰🇷 한국어":
+            "Korean",
+
+        "🇯🇵 日本語":
+            "Japanese",
     }
 
     source_name = source_map.get(
@@ -278,6 +311,7 @@ Captions:
         texts,
         start=1
     ):
+
         prompt += (
             f"\n{i}. {text}"
         )
@@ -311,15 +345,398 @@ Captions:
 
         new_groups.append(
             {
-                "start": group["start"],
-                "end": group["end"],
-                "text": str(
-                    translated_text
-                ).strip(),
+                "start":
+                    group["start"],
+
+                "end":
+                    group["end"],
+
+                "text":
+                    str(
+                        translated_text
+                    ).strip(),
             }
         )
 
     return new_groups
+
+
+# =========================
+# AI Dubbing
+# =========================
+
+TTS_VOICES = {
+
+    "Kore — Firm":
+        "Kore",
+
+    "Puck — Upbeat":
+        "Puck",
+
+    "Charon — Informative":
+        "Charon",
+
+    "Fenrir — Excitable":
+        "Fenrir",
+
+    "Leda — Youthful":
+        "Leda",
+
+    "Aoede — Breezy":
+        "Aoede",
+
+    "Iapetus — Clear":
+        "Iapetus",
+
+    "Achird — Friendly":
+        "Achird",
+
+    "Sulafat — Warm":
+        "Sulafat",
+}
+
+
+def tts_prompt(
+    text,
+    language
+):
+
+    language_name = {
+
+        "🇬🇧 English":
+            "English",
+
+        "🇨🇳 中文":
+            "Chinese Mandarin",
+
+        "🇻🇳 Tiếng Việt":
+            "Vietnamese",
+
+        "🇰🇷 한국어":
+            "Korean",
+
+        "🇯🇵 日本語":
+            "Japanese",
+
+    }.get(
+        language,
+        "the target language"
+    )
+
+    return f"""
+Synthesize natural spoken audio.
+
+Language:
+{language_name}
+
+Style:
+Natural, clear, conversational voice.
+
+IMPORTANT:
+Speak only the transcript.
+Do not explain anything.
+Do not add words.
+Do not translate the transcript.
+
+TRANSCRIPT:
+{text}
+"""
+
+
+def write_pcm_wav(
+    filename,
+    pcm_data,
+    channels=1,
+    rate=24000,
+    sample_width=2
+):
+
+    with wave.open(
+        filename,
+        "wb"
+    ) as wf:
+
+        wf.setnchannels(
+            channels
+        )
+
+        wf.setsampwidth(
+            sample_width
+        )
+
+        wf.setframerate(
+            rate
+        )
+
+        wf.writeframes(
+            pcm_data
+        )
+
+
+def generate_tts_wav(
+    client,
+    text,
+    output_path,
+    voice_name,
+    language,
+    retries=2
+):
+
+    last_error = None
+
+    for attempt in range(
+        retries + 1
+    ):
+
+        try:
+
+            interaction = client.interactions.create(
+
+                model=
+                    "gemini-3.1-flash-tts-preview",
+
+                input=
+                    tts_prompt(
+                        text,
+                        language
+                    ),
+
+                response_format={
+                    "type": "audio"
+                },
+
+                generation_config={
+
+                    "speech_config": [
+
+                        {
+                            "voice":
+                                voice_name
+                        }
+
+                    ]
+
+                },
+            )
+
+            audio = getattr(
+                interaction,
+                "output_audio",
+                None
+            )
+
+            if (
+                audio is None
+                or
+                not getattr(
+                    audio,
+                    "data",
+                    None
+                )
+            ):
+
+                raise ValueError(
+                    "Gemini TTS មិនបានបញ្ជូនសំឡេងមកទេ។"
+                )
+
+            pcm_data = base64.b64decode(
+                audio.data
+            )
+
+            write_pcm_wav(
+                output_path,
+                pcm_data
+            )
+
+            return
+
+        except Exception as e:
+
+            last_error = e
+
+            if attempt < retries:
+
+                time.sleep(2)
+
+    raise last_error
+
+
+def create_dubbing_audio(
+    client,
+    groups,
+    output_path,
+    temp_dir,
+    voice_name,
+    dubbing_language
+):
+
+    if not groups:
+
+        raise ValueError(
+            "មិនមាន Caption សម្រាប់ AI Dubbing ទេ។"
+        )
+
+    clip_paths = []
+
+    for index, group in enumerate(
+        groups
+    ):
+
+        text = str(
+            group["text"]
+        ).strip()
+
+        if not text:
+            continue
+
+        clip_path = os.path.join(
+            temp_dir,
+            f"dub_{index:04d}.wav"
+        )
+
+        generate_tts_wav(
+            client,
+            text,
+            clip_path,
+            voice_name,
+            dubbing_language,
+        )
+
+        clip_paths.append(
+            (
+                clip_path,
+                float(
+                    group["start"]
+                ),
+                float(
+                    group["end"]
+                ),
+            )
+        )
+
+    if not clip_paths:
+
+        raise ValueError(
+            "មិនអាចបង្កើតសំឡេង AI បានទេ។"
+        )
+
+    inputs = []
+    filters = []
+
+    for index, (
+        clip_path,
+        start,
+        end
+    ) in enumerate(
+        clip_paths
+    ):
+
+        inputs.extend(
+            [
+                "-i",
+                clip_path
+            ]
+        )
+
+        delay_ms = max(
+            0,
+            int(
+                start * 1000
+            )
+        )
+
+        filters.append(
+            f"[{index}:a]"
+            f"adelay={delay_ms}:all=1"
+            f"[a{index}]"
+        )
+
+    labels = "".join(
+        f"[a{i}]"
+        for i in range(
+            len(clip_paths)
+        )
+    )
+
+    filters.append(
+        f"{labels}"
+        f"amix="
+        f"inputs={len(clip_paths)}:"
+        f"duration=longest:"
+        f"dropout_transition=0:"
+        f"normalize=0,"
+        f"apad"
+        f"[out]"
+    )
+
+    filter_complex = ";".join(
+        filters
+    )
+
+    run_ffmpeg(
+        inputs
+        + [
+            "-filter_complex",
+            filter_complex,
+
+            "-map",
+            "[out]",
+
+            "-ar",
+            "48000",
+
+            "-ac",
+            "2",
+
+            "-c:a",
+            "aac",
+
+            "-b:a",
+            "192k",
+
+            "-y",
+            output_path,
+        ]
+    )
+
+
+def replace_audio(
+    video_path,
+    dubbed_audio_path,
+    output_path
+):
+
+    run_ffmpeg([
+        "-y",
+
+        "-i",
+        video_path,
+
+        "-i",
+        dubbed_audio_path,
+
+        "-map",
+        "0:v:0",
+
+        "-map",
+        "1:a:0",
+
+        "-c:v",
+        "copy",
+
+        "-c:a",
+        "aac",
+
+        "-b:a",
+        "192k",
+
+        "-shortest",
+
+        "-movflags",
+        "+faststart",
+
+        output_path,
+    ])
 
 
 # =========================
@@ -350,13 +767,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         encoding="utf-8"
     ) as f:
 
-        f.write(header)
+        f.write(
+            header
+        )
 
         for group in groups:
 
-            start = group["start"]
-            end = group["end"]
-            text = group["text"]
+            start = group[
+                "start"
+            ]
+
+            end = group[
+                "end"
+            ]
+
+            text = group[
+                "text"
+            ]
 
             text = text.replace(
                 "\n",
@@ -394,21 +821,47 @@ def burn_caption(
 
     escaped_ass = (
         ass_path
-        .replace("\\", "/")
-        .replace(":", r"\:")
-        .replace("'", r"\'")
+        .replace(
+            "\\",
+            "/"
+        )
+        .replace(
+            ":",
+            r"\:"
+        )
+        .replace(
+            "'",
+            r"\'"
+        )
     )
 
     run_ffmpeg([
         "-y",
-        "-i", video_path,
-        "-vf", f"ass='{escaped_ass}'",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
+
+        "-i",
+        video_path,
+
+        "-vf",
+        f"ass='{escaped_ass}'",
+
+        "-c:v",
+        "libx264",
+
+        "-preset",
+        "veryfast",
+
+        "-crf",
+        "23",
+
+        "-c:a",
+        "aac",
+
+        "-b:a",
+        "128k",
+
+        "-movflags",
+        "+faststart",
+
         output_path,
     ])
 
@@ -430,6 +883,7 @@ source_language = st.selectbox(
     ],
 )
 
+
 target_language = st.selectbox(
     "🎯 បកប្រែទៅជា",
     [
@@ -442,6 +896,50 @@ target_language = st.selectbox(
         "🇯🇵 日本語",
     ],
 )
+
+
+# =========================
+# AI Dubbing Settings
+# =========================
+
+st.subheader(
+    "🎙️ AI Dubbing"
+)
+
+
+enable_dubbing = st.checkbox(
+    "បើក AI Dubbing"
+)
+
+
+dubbing_language = st.selectbox(
+    "🗣️ ភាសាសំឡេង AI",
+    [
+        "🇬🇧 English",
+        "🇨🇳 中文",
+        "🇻🇳 Tiếng Việt",
+        "🇰🇷 한국어",
+        "🇯🇵 日本語",
+    ],
+    disabled=not enable_dubbing,
+)
+
+
+voice_label = st.selectbox(
+    "🎤 សម្លេង AI",
+    list(
+        TTS_VOICES.keys()
+    ),
+    disabled=not enable_dubbing,
+)
+
+
+if enable_dubbing:
+
+    st.info(
+        "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
+        "ហើយជំនួសសំឡេងដើម។"
+    )
 
 
 # =========================
@@ -487,6 +985,16 @@ if video is not None:
                 "khmer_caption.ass"
             )
 
+            caption_video_path = os.path.join(
+                temp_dir,
+                "caption_video.mp4"
+            )
+
+            dubbed_audio_path = os.path.join(
+                temp_dir,
+                "dubbed_audio.wav"
+            )
+
             output_path = os.path.join(
                 temp_dir,
                 "smey_auto_caption.mp4"
@@ -516,6 +1024,7 @@ if video is not None:
                         audio_path
                     )
 
+
                 # -------------------------
                 # Gemini Transcription
                 # -------------------------
@@ -537,15 +1046,30 @@ if video is not None:
                     language_codes = []
 
                     language_code_map = {
-                        "🇰🇭 ខ្មែរ": "km-KH",
-                        "🇬🇧 English": "en-US",
-                        "🇨🇳 中文": "zh-CN",
-                        "🇻🇳 Tiếng Việt": "vi-VN",
-                        "🇰🇷 한국어": "ko-KR",
-                        "🇯🇵 日本語": "ja-JP",
+
+                        "🇰🇭 ខ្មែរ":
+                            "km-KH",
+
+                        "🇬🇧 English":
+                            "en-US",
+
+                        "🇨🇳 中文":
+                            "zh-CN",
+
+                        "🇻🇳 Tiếng Việt":
+                            "vi-VN",
+
+                        "🇰🇷 한국어":
+                            "ko-KR",
+
+                        "🇯🇵 日本語":
+                            "ja-JP",
                     }
 
-                    if source_language != "Auto Detect":
+                    if (
+                        source_language
+                        != "Auto Detect"
+                    ):
 
                         language_codes = [
                             language_code_map[
@@ -554,25 +1078,39 @@ if video is not None:
                         ]
 
                     interaction = client.interactions.create(
-                        model="gemini-3.5-transcribe",
+
+                        model=
+                            "gemini-3.5-transcribe",
+
                         input=[
                             {
-                                "type": "audio",
-                                "uri": audio_file.uri,
-                                "mime_type": audio_file.mime_type,
+                                "type":
+                                    "audio",
+
+                                "uri":
+                                    audio_file.uri,
+
+                                "mime_type":
+                                    audio_file.mime_type,
                             }
                         ],
+
                         generation_config={
+
                             "transcription_config": {
+
                                 "language_codes":
                                     language_codes,
 
                                 "mode": {
-                                    "type": "verbatim",
+
+                                    "type":
+                                        "verbatim",
+
                                     "timestamp_granularities": [
                                         "word"
                                     ],
-                                },
+                                }
                             }
                         },
                     )
@@ -589,87 +1127,4 @@ if video is not None:
 
                     if not groups:
 
-                        st.error(
-                            "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
-                        )
-
-                        st.stop()
-
-                # -------------------------
-                # Translation
-                # -------------------------
-
-                if (
-                    target_language
-                    != "មិនបកប្រែ"
-                ):
-
-                    with st.spinner(
-                        "🌐 Gemini កំពុងបកប្រែ Caption..."
-                    ):
-
-                        groups = translate_captions(
-                            client,
-                            groups,
-                            source_language,
-                            target_language,
-                        )
-
-                # -------------------------
-                # Create ASS
-                # -------------------------
-
-                create_ass(
-                    groups,
-                    ass_path
-                )
-
-                # -------------------------
-                # Burn
-                # -------------------------
-
-                with st.spinner(
-                    "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
-                ):
-
-                    burn_caption(
-                        video_path,
-                        ass_path,
-                        output_path
-                    )
-
-                # -------------------------
-                # Output
-                # -------------------------
-
-                with open(
-                    output_path,
-                    "rb"
-                ) as f:
-
-                    output_data = f.read()
-
-                st.success(
-                    "✅ វីដេអូមាន Caption រួចរាល់!"
-                )
-
-                st.video(
-                    output_data
-                )
-
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូ MP4",
-                    data=output_data,
-                    file_name="smey_auto_caption.mp4",
-                    mime="video/mp4",
-                    use_container_width=True,
-                    on_click="ignore",
-                )
-
-            except Exception as e:
-
-                st.error(
-                    "❌ មានបញ្ហាពេលបង្កើត Caption"
-                )
-
-                st.exception(e)
+                   
