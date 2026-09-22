@@ -1,7 +1,6 @@
 import os
 import subprocess
 import tempfile
-import base64
 
 import streamlit as st
 from google import genai
@@ -231,36 +230,6 @@ def burn_caption(
     ])
 
 
-def show_download_link(video_data):
-
-    encoded = base64.b64encode(
-        video_data
-    ).decode("utf-8")
-
-    html = f"""
-    <div style="text-align:center; margin-top:15px;">
-        <a
-            href="data:video/mp4;base64,{encoded}"
-            download="smey_auto_caption.mp4"
-            style="
-                display:inline-block;
-                padding:14px 24px;
-                background:#ff4b4b;
-                color:white;
-                text-decoration:none;
-                border-radius:10px;
-                font-size:18px;
-                font-weight:bold;
-            "
-        >
-            ⬇️ ទាញយកវីដេអូ MP4
-        </a>
-    </div>
-    """
-
-    st.html(html)
-
-
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
     type=[
@@ -403,8 +372,13 @@ if video is not None:
                     output_data
                 )
 
-                show_download_link(
-                    output_data
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូ MP4",
+                    data=output_data,
+                    file_name="smey_auto_caption.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
+                    on_click="ignore",
                 )
 
             except Exception as e:
