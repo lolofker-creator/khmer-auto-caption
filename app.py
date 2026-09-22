@@ -898,94 +898,83 @@ if caption_clicked or dubbing_clicked:
                         )
 
 
-                # ---------------------------------
-                # Create ASS
-                # ---------------------------------
+# ---------------------------------
+# Caption
+# ---------------------------------
 
-                create_ass(
-                    groups,
-                    ass_path
-                )
+if caption_clicked:
+    create_ass(
+        groups,
+        ass_path
+    )
 
-
-                # ---------------------------------
-                # Burn Caption
-                # ---------------------------------
-
-                with st.spinner(
-                    "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
-                ):
-                    burn_caption(
-                        video_path,
-                        ass_path,
-                        caption_video_path
-                    )
+    with st.spinner(
+        "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
+    ):
+        burn_caption(
+            video_path,
+            ass_path,
+            output_path
+        )
 
 
-                # ---------------------------------
-                # AI Dubbing
-                # ---------------------------------
+# ---------------------------------
+# AI Dubbing
+# ---------------------------------
 
-                if enable_dubbing:
+if dubbing_clicked:
 
-                    if target_language == "មិនបកប្រែ":
-                        st.warning(
-                            "⚠️ សម្រាប់ AI Dubbing "
-                            "សូមជ្រើសភាសានៅ 'បកប្រែទៅជា' "
-                            "ឱ្យដូចភាសាសំឡេង AI។"
-                        )
+    if not enable_dubbing:
+        st.warning(
+            "⚠️ សូមបើក AI Dubbing ជាមុនសិន។"
+        )
 
-                    elif target_language != dubbing_language:
-                        st.warning(
-                            "⚠️ 'បកប្រែទៅជា' និង "
-                            "'ភាសាសំឡេង AI' ត្រូវជ្រើសភាសាដូចគ្នា។"
-                        )
+    elif target_language == "មិនបកប្រែ":
+        st.warning(
+            "⚠️ សូមជ្រើសភាសានៅ 'បកប្រែទៅជា' "
+            "សម្រាប់ AI Dubbing។"
+        )
 
-                    else:
+    elif target_language != dubbing_language:
+        st.warning(
+            "⚠️ 'បកប្រែទៅជា' និង "
+            "'ភាសាសំឡេង AI' ត្រូវជ្រើសភាសាដូចគ្នា។"
+        )
 
-                        with st.spinner(
-                            "🎙️ កំពុងបង្កើតសំឡេង AI..."
-                        ):
+    else:
 
-                            if dubbing_language == "🇰🇭 ខ្មែរ":
-                                voice_name = "Sovann"
-                            else:
-                                voice_name = TTS_VOICES[
-                                    voice_label
-                                ]
+        with st.spinner(
+            "🎙️ កំពុងបង្កើតសំឡេង AI..."
+        ):
+            if dubbing_language == "🇰🇭 ខ្មែរ":
+                voice_name = "Sovann"
+            else:
+                voice_name = TTS_VOICES[
+                    voice_label
+                ]
 
-                            create_dubbing_audio(
-                                client,
-                                groups,
-                                dubbed_audio_path,
-                                temp_dir,
-                                voice_name,
-                                dubbing_language,
-                            )
+            create_dubbing_audio(
+                client,
+                groups,
+                dubbed_audio_path,
+                temp_dir,
+                voice_name,
+                dubbing_language,
+            )
 
-                        with st.spinner(
-                            "🔊 កំពុងដាក់សំឡេង AI..."
-                        ):
-                            replace_audio(
-                                caption_video_path,
-                                dubbed_audio_path,
-                                output_path,
-                            )
+        with st.spinner(
+            "🔊 កំពុងដាក់សំឡេង AI..."
+        ):
+            replace_audio(
+                video_path,
+                dubbed_audio_path,
+                output_path,
+            )
 
-                if (
-                    not enable_dubbing
-                    or target_language == "មិនបកប្រែ"
-                    or target_language != dubbing_language
-                ):
-                    os.replace(
-                        caption_video_path,
-                        output_path
-                    )
 
-                # ---------------------------------
-                # Output
-                # ---------------------------------
-
+# ---------------------------------
+# Output
+# ---------------------------------
                 with open(
                     output_path,
                     "rb"
