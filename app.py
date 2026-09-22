@@ -103,6 +103,50 @@ def parse_json_response(response):
         ) from exc
 
 
+
+# =========================================================
+# Gemini Model Fallback
+# =========================================================
+
+def generate_with_model_fallback(
+    client,
+    contents,
+    config,
+):
+    models = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+    ]
+
+    last_error = None
+
+    for model_name in models:
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+        except Exception as exc:
+            last_error = exc
+            message = str(exc)
+
+            if (
+                "503" in message
+                or "UNAVAILABLE" in message
+                or "high demand" in message.lower()
+                or "429" in message
+                or "RESOURCE_EXHAUSTED" in message
+            ):
+                continue
+
+            raise
+
+    raise last_error
+
 # =========================================================
 # Gemini 3.8 Flash Transcription
 # =========================================================
@@ -134,8 +178,8 @@ Rules:
 6. Return only the JSON array.
 """
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
+    response = generate_with_model_fallback(
+        client,
         contents=[
             types.Part.from_uri(
                 file_uri=audio_file.uri,
@@ -273,8 +317,8 @@ Captions:
     ):
         prompt += f"\n{i}. {text}"
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
+    response = generate_with_model_fallback(
+        client,
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -648,4 +692,4 @@ if video is not None:
                 )
 
                 st.exception(e)
-
+                        
