@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import streamlit as st
 from google import genai
+import imageio_ffmpeg
 
 
 st.set_page_config(
@@ -17,7 +18,7 @@ st.write("Gemini → Khmer Caption")
 def extract_audio(video_path, audio_path):
     subprocess.run(
         [
-            "ffmpeg",
+            imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-i", video_path,
             "-vn",
@@ -57,7 +58,6 @@ def get_words(interaction):
             for annotation in getattr(
                 content, "annotations", []
             ) or []:
-
                 if getattr(annotation, "type", None) == "word_info":
                     words.append(annotation)
 
