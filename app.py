@@ -1126,5 +1126,10 @@ if video is not None:
                     )
 
                     if not groups:
+                                            st.error(
+                        "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
+                    )
+
+                    st.stop()
 
                    
