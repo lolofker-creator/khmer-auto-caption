@@ -20,9 +20,9 @@ st.title("🇰🇭 Smey Auto Caption")
 st.write("Gemini → Caption → Auto Translate → AI Dubbing → MP4")
 
 
-# =========================
+# =========================================================
 # FFmpeg
-# =========================
+# =========================================================
 
 def run_ffmpeg(args):
 
@@ -36,10 +36,7 @@ def run_ffmpeg(args):
     )
 
 
-def extract_audio(
-    video_path,
-    audio_path
-):
+def extract_audio(video_path, audio_path):
 
     run_ffmpeg([
         "-y",
@@ -52,9 +49,9 @@ def extract_audio(
     ])
 
 
-# =========================
+# =========================================================
 # Time
-# =========================
+# =========================================================
 
 def to_seconds(value):
 
@@ -65,7 +62,6 @@ def to_seconds(value):
 
     try:
         return float(value)
-
     except ValueError:
         return 0.0
 
@@ -83,9 +79,9 @@ def ass_time(seconds):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-# =========================
-# Gemini word timestamps
-# =========================
+# =========================================================
+# Gemini Word Timestamps
+# =========================================================
 
 def get_words(interaction):
 
@@ -115,16 +111,14 @@ def get_words(interaction):
                     None
                 ) == "word_info":
 
-                    words.append(
-                        annotation
-                    )
+                    words.append(annotation)
 
     return words
 
 
-# =========================
-# Caption groups
-# =========================
+# =========================================================
+# Caption Groups
+# =========================================================
 
 def make_groups(
     words,
@@ -172,22 +166,18 @@ def make_groups(
             start = word_start
 
         current.append(text)
-
         last_end = word_end
 
         if (
             len(current) >= max_words
-            or
-            last_end - start >= max_duration
+            or last_end - start >= max_duration
         ):
 
-            groups.append(
-                {
-                    "start": start,
-                    "end": last_end,
-                    "text": " ".join(current),
-                }
-            )
+            groups.append({
+                "start": start,
+                "end": last_end,
+                "text": " ".join(current),
+            })
 
             current = []
             start = None
@@ -195,20 +185,18 @@ def make_groups(
 
     if current and start is not None:
 
-        groups.append(
-            {
-                "start": start,
-                "end": last_end,
-                "text": " ".join(current),
-            }
-        )
+        groups.append({
+            "start": start,
+            "end": last_end,
+            "text": " ".join(current),
+        })
 
     return groups
 
 
-# =========================
+# =========================================================
 # Auto Translate
-# =========================
+# =========================================================
 
 def translate_captions(
     client,
@@ -220,54 +208,26 @@ def translate_captions(
     if not groups:
         return groups
 
-    if (
-        target_language == "មិនបកប្រែ"
-    ):
+    if target_language == "មិនបកប្រែ":
         return groups
 
     source_map = {
-
-        "Auto Detect":
-            "the original language",
-
-        "🇰🇭 ខ្មែរ":
-            "Khmer",
-
-        "🇬🇧 English":
-            "English",
-
-        "🇨🇳 中文":
-            "Chinese",
-
-        "🇻🇳 Tiếng Việt":
-            "Vietnamese",
-
-        "🇰🇷 한국어":
-            "Korean",
-
-        "🇯🇵 日本語":
-            "Japanese",
+        "Auto Detect": "the original language",
+        "🇰🇭 ខ្មែរ": "Khmer",
+        "🇬🇧 English": "English",
+        "🇨🇳 中文": "Chinese",
+        "🇻🇳 Tiếng Việt": "Vietnamese",
+        "🇰🇷 한국어": "Korean",
+        "🇯🇵 日本語": "Japanese",
     }
 
     target_map = {
-
-        "🇰🇭 ខ្មែរ":
-            "Khmer",
-
-        "🇬🇧 English":
-            "English",
-
-        "🇨🇳 中文":
-            "Chinese",
-
-        "🇻🇳 Tiếng Việt":
-            "Vietnamese",
-
-        "🇰🇷 한국어":
-            "Korean",
-
-        "🇯🇵 日本語":
-            "Japanese",
+        "🇰🇭 ខ្មែរ": "Khmer",
+        "🇬🇧 English": "English",
+        "🇨🇳 中文": "Chinese",
+        "🇻🇳 Tiếng Việt": "Vietnamese",
+        "🇰🇷 한국어": "Korean",
+        "🇯🇵 日本語": "Japanese",
     }
 
     source_name = source_map.get(
@@ -312,9 +272,7 @@ Captions:
         start=1
     ):
 
-        prompt += (
-            f"\n{i}. {text}"
-        )
+        prompt += f"\n{i}. {text}"
 
     response = client.models.generate_content(
         model="gemini-3.8-flash",
@@ -343,134 +301,46 @@ Captions:
         translated
     ):
 
-        new_groups.append(
-            {
-                "start":
-                    group["start"],
-
-                "end":
-                    group["end"],
-
-                "text":
-                    str(
-                        translated_text
-                    ).strip(),
-            }
-        )
+        new_groups.append({
+            "start": group["start"],
+            "end": group["end"],
+            "text": str(
+                translated_text
+            ).strip(),
+        })
 
     return new_groups
 
 
-# =========================
+# =========================================================
 # AI Dubbing
-# =========================
+# =========================================================
 
 TTS_VOICES = {
-
-    "Kore — Firm":
-        "Kore",
-
-    "Puck — Upbeat":
-        "Puck",
-
-    "Charon — Informative":
-        "Charon",
-
-    "Fenrir — Excitable":
-        "Fenrir",
-
-    "Leda — Youthful":
-        "Leda",
-
-    "Aoede — Breezy":
-        "Aoede",
-
-    "Iapetus — Clear":
-        "Iapetus",
-
-    "Achird — Friendly":
-        "Achird",
-
-    "Sulafat — Warm":
-        "Sulafat",
+    "Kore — Firm": "Kore",
+    "Puck — Upbeat": "Puck",
+    "Charon — Informative": "Charon",
+    "Fenrir — Excitable": "Fenrir",
+    "Leda — Youthful": "Leda",
+    "Aoede — Breezy": "Aoede",
+    "Iapetus — Clear": "Iapetus",
+    "Achird — Friendly": "Achird",
+    "Sulafat — Warm": "Sulafat",
 }
 
 
-def tts_prompt(
-    text,
-    language
-):
+def get_tts_language(language):
 
-    language_name = {
-
-        "🇬🇧 English":
-            "English",
-
-        "🇨🇳 中文":
-            "Chinese Mandarin",
-
-        "🇻🇳 Tiếng Việt":
-            "Vietnamese",
-
-        "🇰🇷 한국어":
-            "Korean",
-
-        "🇯🇵 日本語":
-            "Japanese",
-
+    return {
+        "🇬🇧 English": "English",
+        "🇨🇳 中文": "Chinese Mandarin",
+        "🇻🇳 Tiếng Việt": "Vietnamese",
+        "🇰🇷 한국어": "Korean",
+        "🇯🇵 日本語": "Japanese",
     }.get(
         language,
-        "the target language"
+        "English"
     )
-
-    return f"""
-Synthesize natural spoken audio.
-
-Language:
-{language_name}
-
-Style:
-Natural, clear, conversational voice.
-
-IMPORTANT:
-Speak only the transcript.
-Do not explain anything.
-Do not add words.
-Do not translate the transcript.
-
-TRANSCRIPT:
-{text}
-"""
-
-
-def write_pcm_wav(
-    filename,
-    pcm_data,
-    channels=1,
-    rate=24000,
-    sample_width=2
-):
-
-    with wave.open(
-        filename,
-        "wb"
-    ) as wf:
-
-        wf.setnchannels(
-            channels
-        )
-
-        wf.setsampwidth(
-            sample_width
-        )
-
-        wf.setframerate(
-            rate
-        )
-
-        wf.writeframes(
-            pcm_data
-        )
 
 
 def generate_tts_wav(
@@ -479,86 +349,62 @@ def generate_tts_wav(
     output_path,
     voice_name,
     language,
-    retries=2
 ):
 
-    last_error = None
+    language_name = get_tts_language(
+        language
+    )
 
-    for attempt in range(
-        retries + 1
-    ):
+    prompt = f"""
+Speak the following text naturally.
 
-        try:
+Language:
+{language_name}
 
-            interaction = client.interactions.create(
+Style:
+Natural, clear, conversational.
 
-                model=
-                    "gemini-3.1-flash-tts-preview",
+Speak ONLY the transcript below.
+Do not explain anything.
+Do not add extra words.
 
-                input=
-                    tts_prompt(
-                        text,
-                        language
-                    ),
+TRANSCRIPT:
+{text}
+"""
 
-                response_format={
-                    "type": "audio"
-                },
+    interaction = client.interactions.create(
+        model="gemini-3.1-flash-tts-preview",
+        input=prompt,
+        response_format={
+            "type": "audio"
+        },
+        generation_config={
+            "speech_config": [
+                {
+                    "voice": voice_name
+                }
+            ]
+        },
+    )
 
-                generation_config={
+    if not interaction.output_audio:
+        raise ValueError(
+            "Gemini TTS មិនបានបញ្ជូនសំឡេងមកទេ។"
+        )
 
-                    "speech_config": [
+    audio_data = base64.b64decode(
+        interaction.output_audio.data
+    )
 
-                        {
-                            "voice":
-                                voice_name
-                        }
+    with wave.open(
+        output_path,
+        "wb"
+    ) as wf:
 
-                    ]
-
-                },
-            )
-
-            audio = getattr(
-                interaction,
-                "output_audio",
-                None
-            )
-
-            if (
-                audio is None
-                or
-                not getattr(
-                    audio,
-                    "data",
-                    None
-                )
-            ):
-
-                raise ValueError(
-                    "Gemini TTS មិនបានបញ្ជូនសំឡេងមកទេ។"
-                )
-
-            pcm_data = base64.b64decode(
-                audio.data
-            )
-
-            write_pcm_wav(
-                output_path,
-                pcm_data
-            )
-
-            return
-
-        except Exception as e:
-
-            last_error = e
-
-            if attempt < retries:
-
-                time.sleep(2)
-
-    raise last_error
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(audio_data)
 
 
 def create_dubbing_audio(
@@ -567,7 +413,7 @@ def create_dubbing_audio(
     output_path,
     temp_dir,
     voice_name,
-    dubbing_language
+    dubbing_language,
 ):
 
     if not groups:
@@ -578,9 +424,7 @@ def create_dubbing_audio(
 
     clip_paths = []
 
-    for index, group in enumerate(
-        groups
-    ):
+    for index, group in enumerate(groups):
 
         text = str(
             group["text"]
@@ -605,12 +449,7 @@ def create_dubbing_audio(
         clip_paths.append(
             (
                 clip_path,
-                float(
-                    group["start"]
-                ),
-                float(
-                    group["end"]
-                ),
+                float(group["start"]),
             )
         )
 
@@ -625,24 +464,17 @@ def create_dubbing_audio(
 
     for index, (
         clip_path,
-        start,
-        end
-    ) in enumerate(
-        clip_paths
-    ):
+        start
+    ) in enumerate(clip_paths):
 
-        inputs.extend(
-            [
-                "-i",
-                clip_path
-            ]
-        )
+        inputs.extend([
+            "-i",
+            clip_path,
+        ])
 
         delay_ms = max(
             0,
-            int(
-                start * 1000
-            )
+            int(start * 1000)
         )
 
         filters.append(
@@ -664,20 +496,15 @@ def create_dubbing_audio(
         f"inputs={len(clip_paths)}:"
         f"duration=longest:"
         f"dropout_transition=0:"
-        f"normalize=0,"
-        f"apad"
+        f"normalize=0"
         f"[out]"
-    )
-
-    filter_complex = ";".join(
-        filters
     )
 
     run_ffmpeg(
         inputs
         + [
             "-filter_complex",
-            filter_complex,
+            ";".join(filters),
 
             "-map",
             "[out]",
@@ -739,9 +566,9 @@ def replace_audio(
     ])
 
 
-# =========================
+# =========================================================
 # ASS Subtitle
-# =========================
+# =========================================================
 
 def create_ass(
     groups,
@@ -767,23 +594,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         encoding="utf-8"
     ) as f:
 
-        f.write(
-            header
-        )
+        f.write(header)
 
         for group in groups:
 
-            start = group[
-                "start"
-            ]
-
-            end = group[
-                "end"
-            ]
-
-            text = group[
-                "text"
-            ]
+            text = group["text"]
 
             text = text.replace(
                 "\n",
@@ -802,16 +617,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             f.write(
                 f"Dialogue: 0,"
-                f"{ass_time(start)},"
-                f"{ass_time(end)},"
+                f"{ass_time(group['start'])},"
+                f"{ass_time(group['end'])},"
                 f"Khmer,,0,0,0,,"
                 f"{text}\n"
             )
 
 
-# =========================
+# =========================================================
 # Burn Caption
-# =========================
+# =========================================================
 
 def burn_caption(
     video_path,
@@ -821,18 +636,9 @@ def burn_caption(
 
     escaped_ass = (
         ass_path
-        .replace(
-            "\\",
-            "/"
-        )
-        .replace(
-            ":",
-            r"\:"
-        )
-        .replace(
-            "'",
-            r"\'"
-        )
+        .replace("\\", "/")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
     )
 
     run_ffmpeg([
@@ -866,9 +672,9 @@ def burn_caption(
     ])
 
 
-# =========================
+# =========================================================
 # Language Settings
-# =========================
+# =========================================================
 
 source_language = st.selectbox(
     "🌐 ភាសាដើម",
@@ -898,19 +704,15 @@ target_language = st.selectbox(
 )
 
 
-# =========================
+# =========================================================
 # AI Dubbing Settings
-# =========================
+# =========================================================
 
-st.subheader(
-    "🎙️ AI Dubbing"
-)
-
+st.subheader("🎙️ AI Dubbing")
 
 enable_dubbing = st.checkbox(
     "បើក AI Dubbing"
 )
-
 
 dubbing_language = st.selectbox(
     "🗣️ ភាសាសំឡេង AI",
@@ -924,15 +726,11 @@ dubbing_language = st.selectbox(
     disabled=not enable_dubbing,
 )
 
-
 voice_label = st.selectbox(
     "🎤 សម្លេង AI",
-    list(
-        TTS_VOICES.keys()
-    ),
+    list(TTS_VOICES.keys()),
     disabled=not enable_dubbing,
 )
-
 
 if enable_dubbing:
 
@@ -942,9 +740,9 @@ if enable_dubbing:
     )
 
 
-# =========================
+# =========================================================
 # Video Upload
-# =========================
+# =========================================================
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
@@ -957,9 +755,9 @@ video = st.file_uploader(
 )
 
 
-# =========================
+# =========================================================
 # Process
-# =========================
+# =========================================================
 
 if video is not None:
 
@@ -992,7 +790,7 @@ if video is not None:
 
             dubbed_audio_path = os.path.join(
                 temp_dir,
-                "dubbed_audio.wav"
+                "dubbed_audio.m4a"
             )
 
             output_path = os.path.join(
@@ -1011,9 +809,9 @@ if video is not None:
 
             try:
 
-                # -------------------------
+                # ---------------------------------
                 # Extract Audio
-                # -------------------------
+                # ---------------------------------
 
                 with st.spinner(
                     "⚡ កំពុងដកសំឡេង..."
@@ -1025,9 +823,9 @@ if video is not None:
                     )
 
 
-                # -------------------------
+                # ---------------------------------
                 # Gemini Transcription
-                # -------------------------
+                # ---------------------------------
 
                 with st.spinner(
                     "🎙️ Gemini កំពុងស្តាប់សំឡេង..."
@@ -1046,30 +844,15 @@ if video is not None:
                     language_codes = []
 
                     language_code_map = {
-
-                        "🇰🇭 ខ្មែរ":
-                            "km-KH",
-
-                        "🇬🇧 English":
-                            "en-US",
-
-                        "🇨🇳 中文":
-                            "zh-CN",
-
-                        "🇻🇳 Tiếng Việt":
-                            "vi-VN",
-
-                        "🇰🇷 한국어":
-                            "ko-KR",
-
-                        "🇯🇵 日本語":
-                            "ja-JP",
+                        "🇰🇭 ខ្មែរ": "km-KH",
+                        "🇬🇧 English": "en-US",
+                        "🇨🇳 中文": "zh-CN",
+                        "🇻🇳 Tiếng Việt": "vi-VN",
+                        "🇰🇷 한국어": "ko-KR",
+                        "🇯🇵 日本語": "ja-JP",
                     }
 
-                    if (
-                        source_language
-                        != "Auto Detect"
-                    ):
+                    if source_language != "Auto Detect":
 
                         language_codes = [
                             language_code_map[
@@ -1078,39 +861,23 @@ if video is not None:
                         ]
 
                     interaction = client.interactions.create(
-
-                        model=
-                            "gemini-3.5-transcribe",
-
+                        model="gemini-3.5-transcribe",
                         input=[
                             {
-                                "type":
-                                    "audio",
-
-                                "uri":
-                                    audio_file.uri,
-
-                                "mime_type":
-                                    audio_file.mime_type,
+                                "type": "audio",
+                                "uri": audio_file.uri,
+                                "mime_type": audio_file.mime_type,
                             }
                         ],
-
                         generation_config={
-
                             "transcription_config": {
-
-                                "language_codes":
-                                    language_codes,
-
+                                "language_codes": language_codes,
                                 "mode": {
-
-                                    "type":
-                                        "verbatim",
-
+                                    "type": "verbatim",
                                     "timestamp_granularities": [
                                         "word"
                                     ],
-                                }
+                                },
                             }
                         },
                     )
@@ -1126,16 +893,17 @@ if video is not None:
                     )
 
                     if not groups:
-                                                                    st.error(
+
+                        st.error(
                             "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
                         )
 
                         st.stop()
 
 
-                # -------------------------
-                # Translation
-                # -------------------------
+                # ---------------------------------
+                # Auto Translate
+                # ---------------------------------
 
                 if target_language != "មិនបកប្រែ":
 
@@ -1151,9 +919,9 @@ if video is not None:
                         )
 
 
-                # -------------------------
+                # ---------------------------------
                 # Create ASS
-                # -------------------------
+                # ---------------------------------
 
                 create_ass(
                     groups,
@@ -1161,9 +929,9 @@ if video is not None:
                 )
 
 
-                # -------------------------
+                # ---------------------------------
                 # Burn Caption
-                # -------------------------
+                # ---------------------------------
 
                 with st.spinner(
                     "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
@@ -1176,179 +944,70 @@ if video is not None:
                     )
 
 
-                # -------------------------
+                # ---------------------------------
                 # AI Dubbing
-                # -------------------------
+                # ---------------------------------
 
                 if enable_dubbing:
 
-                    with st.spinner(
-                        "🎙️ Gemini កំពុងបង្កើតសំឡេង AI..."
+                    # AI Dubbing ត្រូវការអត្ថបទ
+                    # ជាភាសាដែលត្រូវនិយាយ។
+                    # បើ Auto Translate មិនបានបើក
+                    # វីដេអូនឹងប្រើអត្ថបទដើម។
+
+                    if (
+                        target_language
+                        == "មិនបកប្រែ"
                     ):
 
-                        voice_name = TTS_VOICES[
-                            voice_label
-                        ]
+                        st.warning(
+                            "⚠️ សម្រាប់ AI Dubbing "
+                            "សូមជ្រើសភាសានៅ 'បកប្រែទៅជា' "
+                            "ឱ្យដូចភាសាសំឡេង AI។"
+                                                    )
 
-                        create_dubbing_audio(
-                            client,
-                            groups,
-                            dubbed_audio_path,
-                            temp_dir,
-                            voice_name,
-                            dubbing_language,
-                        )
+                    else:
 
+                        with st.spinner(
+                            "🎙️ Gemini កំពុងបង្កើតសំឡេង AI..."
+                        ):
 
-                    with st.spinner(
-                        "🔊 កំពុងដាក់សំឡេង AI ជំនួសសំឡេងដើម..."
-                    ):
+                            voice_name = TTS_VOICES[
+                                voice_label
+                            ]
 
-                        replace_audio(
-                            caption_video_path,
-                            dubbed_audio_path,
-                            output_path,
-                        )
+                            create_dubbing_audio(
+                                client,
+                                groups,
+                                dubbed_audio_path,
+                                temp_dir,
+                                voice_name,
+                                dubbing_language,
+                            )
 
-                else:
+                        with st.spinner(
+                            "🔊 កំពុងដាក់សំឡេង AI..."
+                        ):
 
-                    os.replace(
-                        caption_video_path,
-                        output_path
-                    )
+                            replace_audio(
+                                caption_video_path,
+                                dubbed_audio_path,
+                                output_path,
+                            )
 
-
-                # -------------------------
-                # Output
-                # -------------------------
-
-                with open(
-                    output_path,
-                    "rb"
-                ) as f:
-
-                    output_data = f.read()
-
-
-                st.success(
-                    "✅ វីដេអូរួចរាល់!"
-                )
-
-                st.video(
-                    output_data
-                )
-
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូ MP4",
-                    data=output_data,
-                    file_name="smey_auto_caption.mp4",
-                    mime="video/mp4",
-                    use_container_width=True,
-                    on_click="ignore",
-                )
-
-
-            except Exception as e:
-
-                st.error(
-                    "❌ មានបញ្ហាពេលបង្កើតវីដេអូ"
-                )
-
-                st.exception(e)
-                                        st.error(
-                            "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
-                        )
-
-                        st.stop()
-
-
-                # -------------------------
-                # Translation
-                # -------------------------
-
-                if target_language != "មិនបកប្រែ":
-
-                    with st.spinner(
-                        "🌐 Gemini កំពុងបកប្រែ Caption..."
-                    ):
-
-                        groups = translate_captions(
-                            client,
-                            groups,
-                            source_language,
-                            target_language,
-                        )
-
-
-                # -------------------------
-                # Create ASS
-                # -------------------------
-
-                create_ass(
-                    groups,
-                    ass_path
-                )
-
-
-                # -------------------------
-                # Burn Caption
-                # -------------------------
-
-                with st.spinner(
-                    "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
+                if (
+                    not enable_dubbing
+                    or target_language == "មិនបកប្រែ"
                 ):
 
-                    burn_caption(
-                        video_path,
-                        ass_path,
-                        caption_video_path
-                    )
-
-
-                # -------------------------
-                # AI Dubbing
-                # -------------------------
-
-                if enable_dubbing:
-
-                    with st.spinner(
-                        "🎙️ Gemini កំពុងបង្កើតសំឡេង AI..."
-                    ):
-
-                        voice_name = TTS_VOICES[
-                            voice_label
-                        ]
-
-                        create_dubbing_audio(
-                            client,
-                            groups,
-                            dubbed_audio_path,
-                            temp_dir,
-                            voice_name,
-                            dubbing_language,
-                        )
-
-                    with st.spinner(
-                        "🔊 កំពុងដាក់សំឡេង AI ជំនួសសំឡេងដើម..."
-                    ):
-
-                        replace_audio(
-                            caption_video_path,
-                            dubbed_audio_path,
-                            output_path,
-                        )
-
-                else:
-
                     os.replace(
                         caption_video_path,
                         output_path
                     )
 
-
-                # -------------------------
+                # ---------------------------------
                 # Output
-                # -------------------------
+                # ---------------------------------
 
                 with open(
                     output_path,
@@ -1374,7 +1033,6 @@ if video is not None:
                     on_click="ignore",
                 )
 
-
             except Exception as e:
 
                 st.error(
@@ -1382,4 +1040,4 @@ if video is not None:
                 )
 
                 st.exception(e)
-                   
+  
