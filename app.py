@@ -4,6 +4,7 @@ import tempfile
 
 import streamlit as st
 from google import genai
+from google.genai import types
 import imageio_ffmpeg
 
 
@@ -13,8 +14,12 @@ st.set_page_config(
 )
 
 st.title("🇰🇭 Smey Auto Caption")
-st.write("Gemini → Khmer Caption → MP4")
+st.write("Gemini → Caption → Auto Translate → MP4")
 
+
+# =========================
+# FFmpeg
+# =========================
 
 def run_ffmpeg(args):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -28,6 +33,7 @@ def run_ffmpeg(args):
 
 
 def extract_audio(video_path, audio_path):
+
     run_ffmpeg([
         "-y",
         "-i", video_path,
@@ -39,7 +45,12 @@ def extract_audio(video_path, audio_path):
     ])
 
 
+# =========================
+# Time
+# =========================
+
 def to_seconds(value):
+
     if not value:
         return 0.0
 
@@ -47,24 +58,43 @@ def to_seconds(value):
 
     try:
         return float(value)
+
     except ValueError:
         return 0.0
 
 
 def ass_time(seconds):
+
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-    cs = int((seconds - int(seconds)) * 100)
+    cs = int(
+        (seconds - int(seconds)) * 100
+    )
 
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+# =========================
+# Gemini word timestamps
+# =========================
+
 def get_words(interaction):
+
     words = []
 
-    for step in getattr(interaction, "steps", []) or []:
-        for content in getattr(step, "content", []) or []:
+    for step in getattr(
+        interaction,
+        "steps",
+        []
+    ) or []:
+
+        for content in getattr(
+            step,
+            "content",
+            []
+        ) or []:
+
             for annotation in getattr(
                 content,
                 "annotations",
@@ -77,16 +107,23 @@ def get_words(interaction):
                     None
                 ) == "word_info":
 
-                    words.append(annotation)
+                    words.append(
+                        annotation
+                    )
 
     return words
 
+
+# =========================
+# Caption groups
+# =========================
 
 def make_groups(
     words,
     max_words=5,
     max_duration=2.0
 ):
+
     groups = []
 
     current = []
@@ -96,7 +133,11 @@ def make_groups(
     for word in words:
 
         text = (
-            getattr(word, "text", "")
+            getattr(
+                word,
+                "text",
+                ""
+            )
             or ""
         ).strip()
 
@@ -123,19 +164,21 @@ def make_groups(
             start = word_start
 
         current.append(text)
+
         last_end = word_end
 
         if (
             len(current) >= max_words
-            or last_end - start >= max_duration
+            or
+            last_end - start >= max_duration
         ):
 
             groups.append(
-                (
-                    start,
-                    last_end,
-                    " ".join(current),
-                )
+                {
+                    "start": start,
+                    "end": last_end,
+                    "text": " ".join(current),
+                }
             )
 
             current = []
@@ -143,18 +186,149 @@ def make_groups(
             last_end = None
 
     if current and start is not None:
+
         groups.append(
-            (
-                start,
-                last_end,
-                " ".join(current),
-            )
+            {
+                "start": start,
+                "end": last_end,
+                "text": " ".join(current),
+            }
         )
 
     return groups
 
 
-def create_ass(groups, filename):
+# =========================
+# Auto Translate
+# =========================
+
+def translate_captions(
+    client,
+    groups,
+    source_language,
+    target_language
+):
+
+    if not groups:
+        return groups
+
+    if (
+        target_language == "មិនបកប្រែ"
+    ):
+        return groups
+
+    source_map = {
+        "Auto Detect": "the original language",
+        "🇰🇭 ខ្មែរ": "Khmer",
+        "🇬🇧 English": "English",
+        "🇨🇳 中文": "Chinese",
+        "🇻🇳 Tiếng Việt": "Vietnamese",
+        "🇰🇷 한국어": "Korean",
+        "🇯🇵 日本語": "Japanese",
+    }
+
+    target_map = {
+        "🇰🇭 ខ្មែរ": "Khmer",
+        "🇬🇧 English": "English",
+        "🇨🇳 中文": "Chinese",
+        "🇻🇳 Tiếng Việt": "Vietnamese",
+        "🇰🇷 한국어": "Korean",
+        "🇯🇵 日本語": "Japanese",
+    }
+
+    source_name = source_map.get(
+        source_language,
+        "the original language"
+    )
+
+    target_name = target_map.get(
+        target_language,
+        "Khmer"
+    )
+
+    texts = [
+        group["text"]
+        for group in groups
+    ]
+
+    prompt = f"""
+Translate the following video captions.
+
+Source language:
+{source_name}
+
+Target language:
+{target_name}
+
+IMPORTANT RULES:
+1. Return exactly one translated string for each input caption.
+2. Keep the exact same order.
+3. Do not add explanations.
+4. Do not add numbering.
+5. Do not merge captions.
+6. Keep names and numbers accurate.
+7. Translate naturally for subtitles.
+8. Return only a JSON array of strings.
+
+Captions:
+"""
+
+    for i, text in enumerate(
+        texts,
+        start=1
+    ):
+        prompt += (
+            f"\n{i}. {text}"
+        )
+
+    response = client.models.generate_content(
+        model="gemini-3.8-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=list[str],
+        ),
+    )
+
+    translated = response.parsed
+
+    if not translated:
+        return groups
+
+    if len(translated) != len(groups):
+
+        raise ValueError(
+            "Gemini បានបកប្រែចំនួន Caption មិនត្រូវគ្នា។"
+        )
+
+    new_groups = []
+
+    for group, translated_text in zip(
+        groups,
+        translated
+    ):
+
+        new_groups.append(
+            {
+                "start": group["start"],
+                "end": group["end"],
+                "text": str(
+                    translated_text
+                ).strip(),
+            }
+        )
+
+    return new_groups
+
+
+# =========================
+# ASS Subtitle
+# =========================
+
+def create_ass(
+    groups,
+    filename
+):
 
     header = """[Script Info]
 ScriptType: v4.00+
@@ -177,7 +351,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         f.write(header)
 
-        for start, end, text in groups:
+        for group in groups:
+
+            start = group["start"]
+            end = group["end"]
+            text = group["text"]
 
             text = text.replace(
                 "\n",
@@ -202,6 +380,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"{text}\n"
             )
 
+
+# =========================
+# Burn Caption
+# =========================
 
 def burn_caption(
     video_path,
@@ -230,21 +412,60 @@ def burn_caption(
     ])
 
 
+# =========================
+# Language Settings
+# =========================
+
+source_language = st.selectbox(
+    "🌐 ភាសាដើម",
+    [
+        "Auto Detect",
+        "🇰🇭 ខ្មែរ",
+        "🇬🇧 English",
+        "🇨🇳 中文",
+        "🇻🇳 Tiếng Việt",
+        "🇰🇷 한국어",
+        "🇯🇵 日本語",
+    ],
+)
+
+target_language = st.selectbox(
+    "🎯 បកប្រែទៅជា",
+    [
+        "មិនបកប្រែ",
+        "🇰🇭 ខ្មែរ",
+        "🇬🇧 English",
+        "🇨🇳 中文",
+        "🇻🇳 Tiếng Việt",
+        "🇰🇷 한국어",
+        "🇯🇵 日本語",
+    ],
+)
+
+
+# =========================
+# Video Upload
+# =========================
+
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
     type=[
         "mp4",
         "mov",
         "mkv",
-        "webm"
+        "webm",
     ],
 )
 
 
+# =========================
+# Process
+# =========================
+
 if video is not None:
 
     if st.button(
-        "⚡ Gemini បង្កើត Caption",
+        "⚡ បង្កើត Caption",
         use_container_width=True
     ):
 
@@ -274,11 +495,16 @@ if video is not None:
                 video_path,
                 "wb"
             ) as f:
+
                 f.write(
                     video.getbuffer()
                 )
 
             try:
+
+                # -------------------------
+                # Extract Audio
+                # -------------------------
 
                 with st.spinner(
                     "⚡ កំពុងដកសំឡេង..."
@@ -289,8 +515,12 @@ if video is not None:
                         audio_path
                     )
 
+                # -------------------------
+                # Gemini Transcription
+                # -------------------------
+
                 with st.spinner(
-                    "🇰🇭 Gemini កំពុងស្តាប់សំឡេងខ្មែរ..."
+                    "🎙️ Gemini កំពុងស្តាប់សំឡេង..."
                 ):
 
                     client = genai.Client(
@@ -303,6 +533,25 @@ if video is not None:
                         file=audio_path
                     )
 
+                    language_codes = []
+
+                    language_code_map = {
+                        "🇰🇭 ខ្មែរ": "km-KH",
+                        "🇬🇧 English": "en-US",
+                        "🇨🇳 中文": "zh-CN",
+                        "🇻🇳 Tiếng Việt": "vi-VN",
+                        "🇰🇷 한국어": "ko-KR",
+                        "🇯🇵 日本語": "ja-JP",
+                    }
+
+                    if source_language != "Auto Detect":
+
+                        language_codes = [
+                            language_code_map[
+                                source_language
+                            ]
+                        ]
+
                     interaction = client.interactions.create(
                         model="gemini-3.5-transcribe",
                         input=[
@@ -314,9 +563,9 @@ if video is not None:
                         ],
                         generation_config={
                             "transcription_config": {
-                                "language_codes": [
-                                    "km-KH"
-                                ],
+                                "language_codes":
+                                    language_codes,
+
                                 "mode": {
                                     "type": "verbatim",
                                     "timestamp_granularities": [
@@ -338,15 +587,45 @@ if video is not None:
                     )
 
                     if not groups:
+
                         st.error(
-                            "❌ Gemini មិនបានរកឃើញ timestamps សម្រាប់ Caption ទេ។"
+                            "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
                         )
+
                         st.stop()
 
-                    create_ass(
-                        groups,
-                        ass_path
-                    )
+                # -------------------------
+                # Translation
+                # -------------------------
+
+                if (
+                    target_language
+                    != "មិនបកប្រែ"
+                ):
+
+                    with st.spinner(
+                        "🌐 Gemini កំពុងបកប្រែ Caption..."
+                    ):
+
+                        groups = translate_captions(
+                            client,
+                            groups,
+                            source_language,
+                            target_language,
+                        )
+
+                # -------------------------
+                # Create ASS
+                # -------------------------
+
+                create_ass(
+                    groups,
+                    ass_path
+                )
+
+                # -------------------------
+                # Burn
+                # -------------------------
 
                 with st.spinner(
                     "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
@@ -358,10 +637,15 @@ if video is not None:
                         output_path
                     )
 
+                # -------------------------
+                # Output
+                # -------------------------
+
                 with open(
                     output_path,
                     "rb"
                 ) as f:
+
                     output_data = f.read()
 
                 st.success(
