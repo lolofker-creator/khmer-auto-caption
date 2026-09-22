@@ -7,21 +7,30 @@ import imageio_ffmpeg
 from faster_whisper import WhisperModel
 
 
+# =========================================================
+# APP
+# =========================================================
+
 st.set_page_config(
     page_title="Smey Auto Caption",
     page_icon="🇰🇭",
 )
 
-# =========================
+
+# =========================================================
 # LOGO
-# =========================
+# =========================================================
 
 LOGO_FILE = "file_00000000568c8211831d7859c11ddf61.png"
 
 if os.path.exists(LOGO_FILE):
     col1, col2, col3 = st.columns([1, 2, 1])
+
     with col2:
-        st.image(LOGO_FILE, width=300)
+        st.image(
+            LOGO_FILE,
+            width=300,
+        )
 
 
 st.title("🇰🇭 Smey Auto Caption")
@@ -29,11 +38,12 @@ st.write("🎙️ Khmer Speech → Caption → MP4")
 st.info("🆓 Version Free — មិនប្រើ Gemini API")
 
 
-# =========================
+# =========================================================
 # FFMPEG
-# =========================
+# =========================================================
 
 def run_ffmpeg(args):
+
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
@@ -45,6 +55,7 @@ def run_ffmpeg(args):
 
 
 def extract_audio(video_path, audio_path):
+
     run_ffmpeg([
         "-y",
         "-i",
@@ -60,9 +71,9 @@ def extract_audio(video_path, audio_path):
     ])
 
 
-# =========================
-# WHISPER KHMER
-# =========================
+# =========================================================
+# KHMER WHISPER
+# =========================================================
 
 @st.cache_resource
 def load_model():
@@ -76,26 +87,174 @@ def load_model():
     return model
 
 
-# =========================
-# TIME
-# =========================
+# =========================================================
+# ASS TIME
+# =========================================================
 
 def ass_time(seconds):
 
     h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
 
-    cs = int((seconds - int(seconds)) * 100)
+    m = int(
+        (seconds % 3600) // 60
+    )
+
+    s = int(
+        seconds % 60
+    )
+
+    cs = int(
+        (seconds - int(seconds)) * 100
+    )
 
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-# =========================
-# CREATE ASS
-# =========================
+# =========================================================
+# CLEAN KHMER TEXT
+# =========================================================
 
-def create_ass(segments, filename):
+def clean_text(text):
+
+    text = str(text)
+
+    text = text.replace(
+        "\n",
+        " ",
+    )
+
+    text = text.replace(
+        "\r",
+        " ",
+    )
+
+    text = text.strip()
+
+    # Whisper word tokens sometimes contain
+    # spaces around Khmer words.
+    text = " ".join(
+        text.split()
+    )
+
+    return text
+
+
+# =========================================================
+# MAKE SHORT CAPTIONS
+# =========================================================
+
+def make_short_captions(segments):
+
+    captions = []
+
+    for segment in segments:
+
+        words = getattr(
+            segment,
+            "words",
+            None,
+        )
+
+        if not words:
+            continue
+
+        current_words = []
+
+        chunk_start = None
+        last_end = None
+
+        for word in words:
+
+            word_text = str(
+                getattr(
+                    word,
+                    "word",
+                    "",
+                )
+            ).strip()
+
+            if not word_text:
+                continue
+
+            word_start = float(
+                getattr(
+                    word,
+                    "start",
+                    0,
+                )
+            )
+
+            word_end = float(
+                getattr(
+                    word,
+                    "end",
+                    word_start,
+                )
+            )
+
+            if chunk_start is None:
+                chunk_start = word_start
+
+            current_words.append(
+                word_text
+            )
+
+            last_end = word_end
+
+            duration = (
+                last_end - chunk_start
+            )
+
+            # Caption changes approximately
+            # every 1.8 seconds.
+            if duration >= 1.8:
+
+                text = clean_text(
+                    " ".join(
+                        current_words
+                    )
+                )
+
+                if text:
+
+                    captions.append({
+                        "start": chunk_start,
+                        "end": last_end,
+                        "text": text,
+                    })
+
+                current_words = []
+                chunk_start = None
+
+        # Remaining words
+        if (
+            current_words
+            and chunk_start is not None
+            and last_end is not None
+        ):
+
+            text = clean_text(
+                " ".join(
+                    current_words
+                )
+            )
+
+            if text:
+
+                captions.append({
+                    "start": chunk_start,
+                    "end": last_end,
+                    "text": text,
+                })
+
+    return captions
+
+
+# =========================================================
+# CREATE ASS
+# =========================================================
+
+def create_ass(captions, filename):
 
     header = """[Script Info]
 ScriptType: v4.00+
@@ -111,37 +270,71 @@ Style: Khmer,Noto Sans Khmer,70,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    with open(filename, "w", encoding="utf-8") as f:
+    with open(
+        filename,
+        "w",
+        encoding="utf-8",
+    ) as f:
 
         f.write(header)
 
-        for segment in segments:
+        for caption in captions:
 
-            text = str(segment.text).strip()
+            text = clean_text(
+                caption["text"]
+            )
 
-            text = text.replace("\n", " ")
-            text = text.replace("{", r"\{")
-            text = text.replace("}", r"\}")
+            text = text.replace(
+                "{",
+                r"\{",
+            )
 
-            start = ass_time(segment.start)
-            end = ass_time(segment.end)
+            text = text.replace(
+                "}",
+                r"\}",
+            )
+
+            start = ass_time(
+                caption["start"]
+            )
+
+            end = ass_time(
+                caption["end"]
+            )
 
             f.write(
-                f"Dialogue: 0,{start},{end},Khmer,,0,0,0,,{text}\n"
+                f"Dialogue: 0,"
+                f"{start},"
+                f"{end},"
+                f"Khmer,,0,0,0,,"
+                f"{text}\n"
             )
 
 
-# =========================
-# BURN CAPTION
-# =========================
+# =========================================================
+# BURN CAPTION INTO VIDEO
+# =========================================================
 
-def burn_caption(video_path, ass_path, output_path):
+def burn_caption(
+    video_path,
+    ass_path,
+    output_path,
+):
 
     escaped_ass = (
         ass_path
-        .replace("\\", "/")
-        .replace(":", r"\:")
-        .replace("'", r"\'")
+        .replace(
+            "\\",
+            "/",
+        )
+        .replace(
+            ":",
+            r"\:",
+        )
+        .replace(
+            "'",
+            r"\'",
+        )
     )
 
     run_ffmpeg([
@@ -166,19 +359,24 @@ def burn_caption(video_path, ass_path, output_path):
     ])
 
 
-# =========================
+# =========================================================
 # VIDEO UPLOAD
-# =========================
+# =========================================================
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
-    type=["mp4", "mov", "mkv", "webm"],
+    type=[
+        "mp4",
+        "mov",
+        "mkv",
+        "webm",
+    ],
 )
 
 
-# =========================
-# PROCESS
-# =========================
+# =========================================================
+# PROCESS VIDEO
+# =========================================================
 
 if video is not None:
 
@@ -211,15 +409,24 @@ if video is not None:
                 "smey_auto_caption.mp4",
             )
 
-            # Save video
-            with open(video_path, "wb") as f:
-                f.write(video.getbuffer())
+            # -------------------------------------------------
+            # SAVE VIDEO
+            # -------------------------------------------------
+
+            with open(
+                video_path,
+                "wb",
+            ) as f:
+
+                f.write(
+                    video.getbuffer()
+                )
 
             try:
 
-                # -------------------------
-                # Extract audio
-                # -------------------------
+                # -------------------------------------------------
+                # EXTRACT AUDIO
+                # -------------------------------------------------
 
                 with st.spinner(
                     "🎵 កំពុងដកសំឡេងពីវីដេអូ..."
@@ -231,9 +438,9 @@ if video is not None:
                     )
 
 
-                # -------------------------
-                # Load model
-                # -------------------------
+                # -------------------------------------------------
+                # LOAD KHMER MODEL
+                # -------------------------------------------------
 
                 with st.spinner(
                     "🧠 កំពុងបើក Khmer Whisper..."
@@ -242,9 +449,9 @@ if video is not None:
                     model = load_model()
 
 
-                # -------------------------
-                # Transcribe
-                # -------------------------
+                # -------------------------------------------------
+                # TRANSCRIBE
+                # -------------------------------------------------
 
                 with st.spinner(
                     "🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."
@@ -255,10 +462,17 @@ if video is not None:
                         language="km",
                         beam_size=5,
                         vad_filter=True,
+                        word_timestamps=True,
                     )
 
-                    segments = list(segments)
+                    segments = list(
+                        segments
+                    )
 
+
+                # -------------------------------------------------
+                # CHECK AUDIO
+                # -------------------------------------------------
 
                 if not segments:
 
@@ -269,23 +483,45 @@ if video is not None:
                     st.stop()
 
 
-                # -------------------------
-                # Create ASS
-                # -------------------------
+                # -------------------------------------------------
+                # MAKE SHORT CAPTIONS
+                # -------------------------------------------------
 
                 with st.spinner(
-                    "📝 កំពុងបង្កើត Caption..."
+                    "📝 កំពុងបែង Caption តាមការនិយាយ..."
+                ):
+
+                    captions = make_short_captions(
+                        segments
+                    )
+
+
+                if not captions:
+
+                    st.error(
+                        "❌ មិនអាចបែង Caption បានទេ។"
+                    )
+
+                    st.stop()
+
+
+                # -------------------------------------------------
+                # CREATE ASS
+                # -------------------------------------------------
+
+                with st.spinner(
+                    "📝 កំពុងរៀបចំអក្សរ Caption..."
                 ):
 
                     create_ass(
-                        segments,
+                        captions,
                         ass_path,
                     )
 
 
-                # -------------------------
-                # Burn Caption
-                # -------------------------
+                # -------------------------------------------------
+                # BURN CAPTION
+                # -------------------------------------------------
 
                 with st.spinner(
                     "🎬 កំពុងដាក់ Caption ចូលក្នុង MP4..."
@@ -298,9 +534,9 @@ if video is not None:
                     )
 
 
-                # -------------------------
-                # Result
-                # -------------------------
+                # -------------------------------------------------
+                # READ OUTPUT
+                # -------------------------------------------------
 
                 with open(
                     output_path,
@@ -310,11 +546,18 @@ if video is not None:
                     output_data = f.read()
 
 
+                # -------------------------------------------------
+                # RESULT
+                # -------------------------------------------------
+
                 st.success(
-                    "✅ រួចរាល់!"
+                    "✅ វីដេអូរួចរាល់!"
                 )
 
-                st.video(output_data)
+                st.video(
+                    output_data
+                )
+
 
                 st.download_button(
                     "⬇️ ទាញយក MP4",
