@@ -1,7 +1,7 @@
 import os
-import json
 import subprocess
 import tempfile
+import json
 
 import streamlit as st
 from google import genai
@@ -14,6 +14,15 @@ st.set_page_config(
     page_icon="🇰🇭",
 )
 
+# =========================================================
+# Logo
+# =========================================================
+
+st.image(
+    "file_00000000568c8211831d7859c11ddf61.png",
+    use_container_width=True,
+)
+
 st.title("🇰🇭 Smey Auto Caption")
 st.write("Gemini → Caption → Auto Translate → MP4")
 
@@ -24,7 +33,6 @@ st.write("Gemini → Caption → Auto Translate → MP4")
 
 def run_ffmpeg(args):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-
     subprocess.run(
         [ffmpeg] + args,
         stdout=subprocess.DEVNULL,
@@ -50,10 +58,10 @@ def extract_audio(video_path, audio_path):
 # =========================================================
 
 def to_seconds(value):
-    if value is None:
+    if not value:
         return 0.0
 
-    value = str(value).strip().replace("s", "")
+    value = str(value).replace("s", "")
 
     try:
         return float(value)
@@ -62,8 +70,6 @@ def to_seconds(value):
 
 
 def ass_time(seconds):
-    seconds = max(0.0, float(seconds))
-
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -73,170 +79,86 @@ def ass_time(seconds):
 
 
 # =========================================================
-# JSON helper
+# Gemini Word Timestamps
 # =========================================================
 
-def parse_json_response(response):
-    text = getattr(response, "text", "") or ""
-    text = text.strip()
+def get_words(interaction):
+    words = []
 
-    if not text:
-        raise ValueError("Gemini មិនបានបញ្ជូនលទ្ធផល JSON មកទេ។")
+    for step in getattr(interaction, "steps", []) or []:
+        for content in getattr(step, "content", []) or []:
+            for annotation in getattr(
+                content,
+                "annotations",
+                [],
+            ) or []:
 
-    # Remove Markdown JSON fences if Gemini adds them.
-    if text.startswith("```"):
-        lines = text.splitlines()
+                if getattr(
+                    annotation,
+                    "type",
+                    None,
+                ) == "word_info":
+                    words.append(annotation)
 
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-
-        text = "\n".join(lines).strip()
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            "Gemini បានបញ្ជូនលទ្ធផលដែលមិនមែនជា JSON ត្រឹមត្រូវ។"
-        ) from exc
-
+    return words
 
 
 # =========================================================
-# Gemini Model Fallback
+# Caption Groups
 # =========================================================
 
-def generate_with_model_fallback(
-    client,
-    contents,
-    config,
+def make_groups(
+    words,
+    max_words=5,
+    max_duration=2.0,
 ):
-    models = [
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        
-    ]
-
-    last_error = None
-
-    for model_name in models:
-        try:
-            return client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config,
-            )
-        except Exception as exc:
-            last_error = exc
-            message = str(exc)
-
-            if (
-                "503" in message
-                or "UNAVAILABLE" in message
-                or "high demand" in message.lower()
-                or "429" in message
-                or "RESOURCE_EXHAUSTED" in message
-            ):
-                continue
-
-            raise
-
-    raise last_error
-
-# =========================================================
-# Gemini 3.8 Flash Transcription
-# =========================================================
-
-def transcribe_with_gemini_38(
-    client,
-    audio_file,
-    language_hint,
-):
-    prompt = f"""
-Transcribe this audio accurately.
-
-Language:
-{language_hint}
-
-Return ONLY a valid JSON array.
-
-Each item must be an object with exactly these fields:
-- start: number of seconds from the beginning
-- end: number of seconds from the beginning
-- text: the exact spoken words for that segment
-
-Rules:
-1. Keep the spoken words in the original language.
-2. Do not translate.
-3. Make short natural caption segments, about 2 seconds each.
-4. Do not add explanations.
-5. Do not use Markdown.
-6. Return only the JSON array.
-"""
-
-    response = generate_with_model_fallback(
-        client,
-        contents=[
-            types.Part.from_uri(
-                file_uri=audio_file.uri,
-                mime_type=audio_file.mime_type,
-            ),
-            prompt,
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-        ),
-    )
-
-    raw_segments = parse_json_response(response)
-
-    if not isinstance(raw_segments, list):
-        raise ValueError(
-            "Gemini មិនបានបញ្ជូន Caption ជា JSON array ទេ។"
-        )
-
     groups = []
+    current = []
+    start = None
+    last_end = None
 
-    for item in raw_segments:
-        if not isinstance(item, dict):
-            continue
-
-        text = str(
-            item.get("text", "")
+    for word in words:
+        text = (
+            getattr(word, "text", "")
+            or ""
         ).strip()
 
         if not text:
             continue
 
-        try:
-            start = float(
-                item.get("start", 0)
-            )
+        word_start = to_seconds(
+            getattr(word, "start_offset", "")
+        )
 
-            end = float(
-                item.get(
-                    "end",
-                    start + 2,
-                )
-            )
+        word_end = to_seconds(
+            getattr(word, "end_offset", "")
+        )
 
-        except (TypeError, ValueError):
-            continue
+        if start is None:
+            start = word_start
 
-        if start < 0:
-            start = 0.0
+        current.append(text)
+        last_end = word_end
 
-        if end <= start:
-            end = start + 2.0
+        if (
+            len(current) >= max_words
+            or last_end - start >= max_duration
+        ):
+            groups.append({
+                "start": start,
+                "end": last_end,
+                "text": " ".join(current),
+            })
 
+            current = []
+            start = None
+            last_end = None
+
+    if current and start is not None:
         groups.append({
             "start": start,
-            "end": end,
-            "text": text,
+            "end": last_end,
+            "text": " ".join(current),
         })
 
     return groups
@@ -311,26 +233,22 @@ IMPORTANT RULES:
 Captions:
 """
 
-    for i, text in enumerate(
-        texts,
-        start=1,
-    ):
+    for i, text in enumerate(texts, start=1):
         prompt += f"\n{i}. {text}"
 
-    response = generate_with_model_fallback(
-        client,
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
+            response_schema=list[str],
         ),
     )
 
-    translated = parse_json_response(response)
+    translated = response.parsed
 
-    if not isinstance(translated, list):
-        raise ValueError(
-            "Gemini មិនបានបញ្ជូន Translation ជា JSON array ទេ។"
-        )
+    if not translated:
+        return groups
 
     if len(translated) != len(groups):
         raise ValueError(
@@ -366,10 +284,10 @@ def create_ass(
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
-
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Khmer,Noto Sans Khmer,60,&H00FFFFFF,&H00FFFFFF,&H00FF66FF,&HCC000000,1,0,0,0,100,100,0,0,3,3,1,2,50,50,220,1
+Style: Khmer,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,3,1,2,50,50,220,1
+
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
@@ -379,13 +297,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         "w",
         encoding="utf-8",
     ) as f:
-
         f.write(header)
 
         for group in groups:
-            text = str(
-                group.get("text", "")
-            )
+            text = group["text"]
 
             text = text.replace(
                 "\n",
@@ -411,10 +326,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
 
-# =========================================================
-# Burn Caption
-# =========================================================
-
 def burn_caption(
     video_path,
     ass_path,
@@ -429,7 +340,8 @@ def burn_caption(
 
     run_ffmpeg([
         "-y",
-        "-i", video_path,
+        "-i",
+        video_path,
         "-vf",
         f"ass='{escaped_ass}'",
         "-c:v",
@@ -553,67 +465,140 @@ if video is not None:
 
 
                 # ---------------------------------
-                # Gemini Client
-                # ---------------------------------
-
-                client = genai.Client(
-                    api_key=st.secrets[
-                        "GEMINI_API_KEY"
-                    ]
-                )
-
-
-                # ---------------------------------
-                # Upload Audio
-                # ---------------------------------
-
-                with st.spinner(
-                    "📤 កំពុងផ្ញើសំឡេងទៅ Gemini..."
-                ):
-                    audio_file = client.files.upload(
-                        file=audio_path,
-                    )
-
-
-                # ---------------------------------
-                # Language
-                # ---------------------------------
-
-                language_code_map = {
-                    "🇰🇭 ខ្មែរ": "km-KH",
-                    "🇬🇧 English": "en-US",
-                    "🇨🇳 中文": "zh-CN",
-                    "🇻🇳 Tiếng Việt": "vi-VN",
-                    "🇰🇷 한국어": "ko-KR",
-                    "🇯🇵 日本語": "ja-JP",
-                }
-
-                if source_language == "Auto Detect":
-                    language_hint = "detect automatically"
-                else:
-                    language_hint = language_code_map[
-                        source_language
-                    ]
-
-
-                # ---------------------------------
-                # Gemini 3.8 Transcription
+                # Gemini Transcription
                 # ---------------------------------
 
                 with st.spinner(
                     "🎙️ Gemini កំពុងស្តាប់សំឡេង..."
                 ):
-                    groups = transcribe_with_gemini_38(
-                        client,
-                        audio_file,
-                        language_hint,
+
+                    client = genai.Client(
+                        api_key=st.secrets[
+                            "GEMINI_API_KEY"
+                        ]
                     )
 
-                if not groups:
-                    st.error(
-                        "❌ Gemini មិនបានរកឃើញ Caption ទេ។"
+                    audio_file = client.files.upload(
+                        file=audio_path,
                     )
-                    st.stop()
+
+                    language_codes = []
+
+                    language_code_map = {
+                        "🇰🇭 ខ្មែរ": "km-KH",
+                        "🇬🇧 English": "en-US",
+                        "🇨🇳 中文": "zh-CN",
+                        "🇻🇳 Tiếng Việt": "vi-VN",
+                        "🇰🇷 한국어": "ko-KR",
+                        "🇯🇵 日本語": "ja-JP",
+                    }
+
+                    if source_language != "Auto Detect":
+                        language_codes = [
+                            language_code_map[
+                                source_language
+                            ]
+                        ]
+
+                    language_hint = (
+                        language_codes[0]
+                        if language_codes
+                        else "detect automatically"
+                    )
+
+                    timestamp_prompt = f"""
+Transcribe this audio accurately.
+Language: {language_hint}
+
+Return ONLY valid JSON: an array of caption segments.
+
+Each segment must have exactly these fields:
+- start: number of seconds from the beginning
+- end: number of seconds from the beginning
+- text: the exact spoken words for that segment
+
+Make short natural caption segments, about 2 seconds each.
+Do not translate.
+Do not add explanations or markdown.
+"""
+
+                    response = client.models.generate_content(
+                        model="gemini-3.8-flash",
+                        contents=[
+                            types.Part.from_uri(
+                                file_uri=audio_file.uri,
+                                mime_type=audio_file.mime_type,
+                            ),
+                            timestamp_prompt,
+                        ],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=list[
+                                dict[str, object]
+                            ],
+                        ),
+                    )
+
+                    raw_segments = response.parsed
+                    groups = []
+
+                    if isinstance(
+                        raw_segments,
+                        list,
+                    ):
+                        for item in raw_segments:
+
+                            if not isinstance(
+                                item,
+                                dict,
+                            ):
+                                continue
+
+                            text = str(
+                                item.get(
+                                    "text",
+                                    "",
+                                )
+                            ).strip()
+
+                            if not text:
+                                continue
+
+                            try:
+                                start = float(
+                                    item.get(
+                                        "start",
+                                        0,
+                                    )
+                                )
+
+                                end = float(
+                                    item.get(
+                                        "end",
+                                        start + 2,
+                                    )
+                                )
+
+                            except (
+                                TypeError,
+                                ValueError,
+                            ):
+                                continue
+
+                            if end <= start:
+                                end = start + 2
+
+                            groups.append({
+                                "start": start,
+                                "end": end,
+                                "text": text,
+                            })
+
+                    if not groups:
+                        st.error(
+                            "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
+                        )
+                        st.stop()
 
 
                 # ---------------------------------
@@ -625,6 +610,7 @@ if video is not None:
                     with st.spinner(
                         "🌐 Gemini កំពុងបកប្រែ Caption..."
                     ):
+
                         groups = translate_captions(
                             client,
                             groups,
@@ -634,7 +620,7 @@ if video is not None:
 
 
                 # ---------------------------------
-                # Create ASS
+                # Create Caption
                 # ---------------------------------
 
                 create_ass(
@@ -642,14 +628,10 @@ if video is not None:
                     ass_path,
                 )
 
-
-                # ---------------------------------
-                # Burn Caption
-                # ---------------------------------
-
                 with st.spinner(
                     "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
                 ):
+
                     burn_caption(
                         video_path,
                         ass_path,
@@ -667,7 +649,6 @@ if video is not None:
                 ) as f:
                     output_data = f.read()
 
-
                 st.success(
                     "✅ វីដេអូរួចរាល់!"
                 )
@@ -682,7 +663,9 @@ if video is not None:
                     file_name="smey_auto_caption.mp4",
                     mime="video/mp4",
                     use_container_width=True,
+                    on_click="ignore",
                 )
+
 
             except Exception as e:
 
@@ -691,4 +674,3 @@ if video is not None:
                 )
 
                 st.exception(e)
-                        
