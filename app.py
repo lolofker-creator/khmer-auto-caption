@@ -225,14 +225,32 @@ Captions:
     for i, text in enumerate(texts, start=1):
         prompt += f"\n{i}. {text}"
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=list[str],
-        ),
-    )
+    # Use a lighter translation model first.
+    # If Google temporarily returns 503, try the stable 3.8 Flash model.
+    translation_models = [
+        "gemini-3.1-flash-lite",
+        "gemini-3.8-flash",
+    ]
+
+    response = None
+    last_error = None
+
+    for model_name in translation_models:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=list[str],
+                ),
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+
+    if response is None:
+        raise last_error
 
     translated = response.parsed
 
@@ -887,7 +905,7 @@ if video is not None:
                     with st.spinner(
                         "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
                     ):
-                       burn_caption(
+                        burn_caption(
                             video_path,
                             ass_path,
                             output_path,
