@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+
 import streamlit as st
 from google import genai
 import imageio_ffmpeg
@@ -8,7 +9,7 @@ import imageio_ffmpeg
 
 st.set_page_config(
     page_title="Smey Auto Caption",
-    page_icon="🎬",
+    page_icon="🇰🇭",
 )
 
 st.title("🇰🇭 Smey Auto Caption")
@@ -16,15 +17,21 @@ st.write("Gemini → Khmer Caption")
 
 
 def extract_audio(video_path, audio_path):
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+
     subprocess.run(
         [
-            imageio_ffmpeg.get_ffmpeg_exe(),
+            ffmpeg_exe,
             "-y",
-            "-i", video_path,
+            "-i",
+            video_path,
             "-vn",
-            "-ac", "1",
-            "-ar", "16000",
-            "-c:a", "pcm_s16le",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
             audio_path,
         ],
         stdout=subprocess.DEVNULL,
@@ -38,14 +45,21 @@ def to_seconds(value):
         return 0.0
 
     value = str(value).replace("s", "")
-    return float(value)
+
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
 
 
 def ass_time(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-    cs = int((seconds - int(seconds)) * 100)
+
+    cs = int(
+        (seconds - int(seconds)) * 100
+    )
 
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
@@ -53,18 +67,42 @@ def ass_time(seconds):
 def get_words(interaction):
     words = []
 
-    for step in getattr(interaction, "steps", []) or []:
-        for content in getattr(step, "content", []) or []:
+    for step in getattr(
+        interaction,
+        "steps",
+        []
+    ) or []:
+
+        for content in getattr(
+            step,
+            "content",
+            []
+        ) or []:
+
             for annotation in getattr(
-                content, "annotations", []
+                content,
+                "annotations",
+                []
             ) or []:
-                if getattr(annotation, "type", None) == "word_info":
+
+                if (
+                    getattr(
+                        annotation,
+                        "type",
+                        None
+                    )
+                    == "word_info"
+                ):
                     words.append(annotation)
 
     return words
 
 
-def make_groups(words, max_words=5, max_duration=2.0):
+def make_groups(
+    words,
+    max_words=5,
+    max_duration=2.0
+):
     groups = []
 
     current = []
@@ -73,17 +111,32 @@ def make_groups(words, max_words=5, max_duration=2.0):
 
     for word in words:
 
-        text = (getattr(word, "text", "") or "").strip()
+        text = (
+            getattr(
+                word,
+                "text",
+                ""
+            )
+            or ""
+        ).strip()
 
         if not text:
             continue
 
         word_start = to_seconds(
-            getattr(word, "start_offset", "")
+            getattr(
+                word,
+                "start_offset",
+                ""
+            )
         )
 
         word_end = to_seconds(
-            getattr(word, "end_offset", "")
+            getattr(
+                word,
+                "end_offset",
+                ""
+            )
         )
 
         if start is None:
@@ -94,8 +147,12 @@ def make_groups(words, max_words=5, max_duration=2.0):
 
         if (
             len(current) >= max_words
-            or last_end - start >= max_duration
+            or (
+                last_end - start
+                >= max_duration
+            )
         ):
+
             groups.append(
                 (
                     start,
@@ -108,7 +165,12 @@ def make_groups(words, max_words=5, max_duration=2.0):
             start = None
             last_end = None
 
-    if current and start is not None:
+    if (
+        current
+        and start is not None
+        and last_end is not None
+    ):
+
         groups.append(
             (
                 start,
@@ -120,7 +182,10 @@ def make_groups(words, max_words=5, max_duration=2.0):
     return groups
 
 
-def create_ass(groups, filename):
+def create_ass(
+    groups,
+    filename
+):
 
     header = """[Script Info]
 ScriptType: v4.00+
@@ -135,14 +200,30 @@ Style: Khmer,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    with open(filename, "w", encoding="utf-8") as f:
+    with open(
+        filename,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
         f.write(header)
 
         for start, end, text in groups:
 
-            text = text.replace("\n", " ")
-            text = text.replace("{", r"\{")
-            text = text.replace("}", r"\}")
+            text = text.replace(
+                "\n",
+                " "
+            )
+
+            text = text.replace(
+                "{",
+                r"\{"
+            )
+
+            text = text.replace(
+                "}",
+                r"\}"
+            )
 
             f.write(
                 f"Dialogue: 0,"
@@ -155,7 +236,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
-    type=["mp4", "mov", "mkv", "webm"],
+    type=[
+        "mp4",
+        "mov",
+        "mkv",
+        "webm"
+    ],
 )
 
 
@@ -183,38 +269,51 @@ if video is not None:
                 "khmer_caption.ass"
             )
 
-            with open(video_path, "wb") as f:
-                f.write(video.getbuffer())
+            with open(
+                video_path,
+                "wb"
+            ) as f:
+                f.write(
+                    video.getbuffer()
+                )
 
             with st.spinner(
                 "⚡ Gemini កំពុងស្តាប់សំឡេង..."
             ):
 
+                # Extract audio
                 extract_audio(
                     video_path,
                     audio_path
                 )
 
+                # Gemini client
                 client = genai.Client(
-                    api_key=st.secrets["GEMINI_API_KEY"]
+                    api_key=st.secrets[
+                        "GEMINI_API_KEY"
+                    ]
                 )
 
+                # Upload audio
                 audio_file = client.files.upload(
                     file=audio_path
                 )
 
+                # Gemini transcription
                 interaction = client.interactions.create(
                     model="gemini-3.5-transcribe",
                     input=[
                         {
                             "type": "audio",
                             "uri": audio_file.uri,
-                            "mime_type": "audio/wav",
+                            "mime_type": audio_file.mime_type,
                         }
                     ],
                     generation_config={
                         "transcription_config": {
-                            "language_codes": ["km-KH"],
+                            "language_codes": [
+                                "km-KH"
+                            ],
                             "mode": {
                                 "type": "verbatim",
                                 "timestamp_granularities": [
@@ -225,14 +324,19 @@ if video is not None:
                     },
                 )
 
-                words = get_words(interaction)
+                # Get word timestamps
+                words = get_words(
+                    interaction
+                )
 
+                # Make caption groups
                 groups = make_groups(
                     words,
                     max_words=5,
                     max_duration=2.0,
                 )
 
+                # Create ASS caption
                 create_ass(
                     groups,
                     ass_path
@@ -244,7 +348,9 @@ if video is not None:
             ) as f:
                 data = f.read()
 
-        st.success("✅ Gemini Caption រួចរាល់!")
+        st.success(
+            "✅ Gemini Caption រួចរាល់!"
+        )
 
         st.download_button(
             "⬇️ ទាញយក Caption",
