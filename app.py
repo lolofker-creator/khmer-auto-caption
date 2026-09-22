@@ -118,7 +118,7 @@ def generate_with_model_fallback(
         "gemini-3.7-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-2.5-flash",
+        
     ]
 
     last_error = None
