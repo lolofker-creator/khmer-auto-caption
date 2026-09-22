@@ -13,31 +13,30 @@ st.set_page_config(
 )
 
 st.title("🇰🇭 Smey Auto Caption")
-st.write("Gemini → Khmer Caption")
+st.write("Gemini → Khmer Caption → MP4")
 
 
-def extract_audio(video_path, audio_path):
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+def run_ffmpeg(args):
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
-        [
-            ffmpeg_exe,
-            "-y",
-            "-i",
-            video_path,
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-c:a",
-            "pcm_s16le",
-            audio_path,
-        ],
+        [ffmpeg] + args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=True,
     )
+
+
+def extract_audio(video_path, audio_path):
+    run_ffmpeg([
+        "-y",
+        "-i", video_path,
+        "-vn",
+        "-ac", "1",
+        "-ar", "16000",
+        "-c:a", "pcm_s16le",
+        audio_path,
+    ])
 
 
 def to_seconds(value):
@@ -56,10 +55,7 @@ def ass_time(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-
-    cs = int(
-        (seconds - int(seconds)) * 100
-    )
+    cs = int((seconds - int(seconds)) * 100)
 
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
@@ -67,32 +63,18 @@ def ass_time(seconds):
 def get_words(interaction):
     words = []
 
-    for step in getattr(
-        interaction,
-        "steps",
-        []
-    ) or []:
-
-        for content in getattr(
-            step,
-            "content",
-            []
-        ) or []:
-
+    for step in getattr(interaction, "steps", []) or []:
+        for content in getattr(step, "content", []) or []:
             for annotation in getattr(
-                content,
-                "annotations",
-                []
+                content, "annotations", []
             ) or []:
 
-                if (
-                    getattr(
-                        annotation,
-                        "type",
-                        None
-                    )
-                    == "word_info"
-                ):
+                if getattr(
+                    annotation,
+                    "type",
+                    None
+                ) == "word_info":
+
                     words.append(annotation)
 
     return words
@@ -112,11 +94,7 @@ def make_groups(
     for word in words:
 
         text = (
-            getattr(
-                word,
-                "text",
-                ""
-            )
+            getattr(word, "text", "")
             or ""
         ).strip()
 
@@ -147,10 +125,7 @@ def make_groups(
 
         if (
             len(current) >= max_words
-            or (
-                last_end - start
-                >= max_duration
-            )
+            or last_end - start >= max_duration
         ):
 
             groups.append(
@@ -165,12 +140,7 @@ def make_groups(
             start = None
             last_end = None
 
-    if (
-        current
-        and start is not None
-        and last_end is not None
-    ):
-
+    if current and start is not None:
         groups.append(
             (
                 start,
@@ -182,10 +152,7 @@ def make_groups(
     return groups
 
 
-def create_ass(
-    groups,
-    filename
-):
+def create_ass(groups, filename):
 
     header = """[Script Info]
 ScriptType: v4.00+
@@ -234,6 +201,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
 
+def burn_caption(
+    video_path,
+    ass_path,
+    output_path
+):
+
+    # Escape the ASS path for FFmpeg filter syntax
+    escaped_ass = (
+        ass_path
+        .replace("\\", "/")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+    )
+
+    run_ffmpeg([
+        "-y",
+        "-i", video_path,
+        "-vf", f"ass='{escaped_ass}'",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path,
+    ])
+
+
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
     type=[
@@ -269,6 +264,11 @@ if video is not None:
                 "khmer_caption.ass"
             )
 
+            output_path = os.path.join(
+                temp_dir,
+                "smey_auto_caption.mp4"
+            )
+
             with open(
                 video_path,
                 "wb"
@@ -277,85 +277,112 @@ if video is not None:
                     video.getbuffer()
                 )
 
-            with st.spinner(
-                "⚡ Gemini កំពុងស្តាប់សំឡេង..."
-            ):
+            try:
 
-                # Extract audio
-                extract_audio(
-                    video_path,
-                    audio_path
-                )
+                with st.spinner(
+                    "⚡ កំពុងដកសំឡេង..."
+                ):
 
-                # Gemini client
-                client = genai.Client(
-                    api_key=st.secrets[
-                        "GEMINI_API_KEY"
-                    ]
-                )
+                    extract_audio(
+                        video_path,
+                        audio_path
+                    )
 
-                # Upload audio
-                audio_file = client.files.upload(
-                    file=audio_path
-                )
+                with st.spinner(
+                    "🇰🇭 Gemini កំពុងស្តាប់សំឡេងខ្មែរ..."
+                ):
 
-                # Gemini transcription
-                interaction = client.interactions.create(
-                    model="gemini-3.5-transcribe",
-                    input=[
-                        {
-                            "type": "audio",
-                            "uri": audio_file.uri,
-                            "mime_type": audio_file.mime_type,
-                        }
-                    ],
-                    generation_config={
-                        "transcription_config": {
-                            "language_codes": [
-                                "km-KH"
-                            ],
-                            "mode": {
-                                "type": "verbatim",
-                                "timestamp_granularities": [
-                                    "word"
+                    client = genai.Client(
+                        api_key=st.secrets[
+                            "GEMINI_API_KEY"
+                        ]
+                    )
+
+                    audio_file = client.files.upload(
+                        file=audio_path
+                    )
+
+                    interaction = client.interactions.create(
+                        model="gemini-3.5-transcribe",
+                        input=[
+                            {
+                                "type": "audio",
+                                "uri": audio_file.uri,
+                                "mime_type": audio_file.mime_type,
+                            }
+                        ],
+                        generation_config={
+                            "transcription_config": {
+                                "language_codes": [
+                                    "km-KH"
                                 ],
-                            },
-                        }
-                    },
+                                "mode": {
+                                    "type": "verbatim",
+                                    "timestamp_granularities": [
+                                        "word"
+                                    ],
+                                },
+                            }
+                        },
+                    )
+
+                    words = get_words(
+                        interaction
+                    )
+
+                    groups = make_groups(
+                        words,
+                        max_words=5,
+                        max_duration=2.0,
+                    )
+
+                    if not groups:
+                        st.error(
+                            "❌ Gemini មិនបានរកឃើញ timestamps សម្រាប់ Caption ទេ។"
+                        )
+                        st.stop()
+
+                    create_ass(
+                        groups,
+                        ass_path
+                    )
+
+                with st.spinner(
+                    "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
+                ):
+
+                    burn_caption(
+                        video_path,
+                        ass_path,
+                        output_path
+                    )
+
+                with open(
+                    output_path,
+                    "rb"
+                ) as f:
+                    output_data = f.read()
+
+                st.success(
+                    "✅ វីដេអូមាន Caption រួចរាល់!"
                 )
 
-                # Get word timestamps
-                words = get_words(
-                    interaction
+                st.video(
+                    output_data
                 )
 
-                # Make caption groups
-                groups = make_groups(
-                    words,
-                    max_words=5,
-                    max_duration=2.0,
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូ MP4",
+                    data=output_data,
+                    file_name="smey_auto_caption.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
                 )
 
-                # Create ASS caption
-                create_ass(
-                    groups,
-                    ass_path
+            except Exception as e:
+
+                st.error(
+                    "❌ មានបញ្ហាពេលបង្កើត Caption"
                 )
 
-            with open(
-                ass_path,
-                "rb"
-            ) as f:
-                data = f.read()
-
-        st.success(
-            "✅ Gemini Caption រួចរាល់!"
-        )
-
-        st.download_button(
-            "⬇️ ទាញយក Caption",
-            data=data,
-            file_name="khmer_caption.ass",
-            mime="text/plain",
-            use_container_width=True,
-        )
+                st.exception(e)
