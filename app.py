@@ -2,10 +2,6 @@ import os
 import subprocess
 import tempfile
 import urllib.request
-import urllib.error
-import ipaddress
-import socket
-from urllib.parse import urlparse
 
 import streamlit as st
 from google import genai
@@ -235,108 +231,78 @@ def gemini_tts(text, output_path):
             "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
         ) from e
 
-def validate_url(url):
-    parsed = urlparse(url.strip())
-
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+def webpage_download(url, output_path):
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
         raise RuntimeError("❌ URL មិនត្រឹមត្រូវ។")
 
     try:
-        port = parsed.port
-    except ValueError:
-        raise RuntimeError("❌ Port ក្នុង URL មិនត្រឹមត្រូវ។")
+        import yt_dlp
+    except ImportError as e:
+        raise RuntimeError(
+            "❌ yt-dlp មិនទាន់បានដំឡើង។ សូមបន្ថែម yt-dlp ក្នុង requirements.txt។"
+        ) from e
 
-    if port and port not in (80, 443):
-        raise RuntimeError("❌ អនុញ្ញាតតែ Port 80/443។")
+    temp_template = output_path.replace(".mp4", ".%(ext)s")
 
-    try:
-        addresses = socket.getaddrinfo(
-            parsed.hostname,
-            port or 443,
-            type=socket.SOCK_STREAM,
-        )
-    except Exception:
-        raise RuntimeError("❌ មិនអាចភ្ជាប់ទៅ Website នេះបាន។")
-
-    for item in addresses:
-        ip = ipaddress.ip_address(item[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            raise RuntimeError("❌ URL នេះមិនអាចប្រើសម្រាប់ Download បានទេ។")
-
-    return url.strip()
-
-
-def direct_download(url, output_path):
-    url = validate_url(url)
-
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "video/mp4,video/*,application/octet-stream;q=0.9,*/*;q=0.5",
+    options = {
+        "format": "bv*+ba/b",
+        "outtmpl": temp_template,
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "retries": 3,
+        "fragment_retries": 3,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Safari/537.36",
         },
-    )
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            content_type = (r.headers.get("Content-Type") or "").lower()
-            length = r.headers.get("Content-Length")
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+            downloaded = ydl.prepare_filename(info)
 
-            if length:
-                try:
-                    if int(length) > MAX_DOWNLOAD_MB * 1024 * 1024:
-                        raise RuntimeError(
-                            f"❌ វីដេអូលើស {MAX_DOWNLOAD_MB}MB។"
-                        )
-                except ValueError:
-                    pass
+            candidates = [
+                output_path,
+                os.path.splitext(downloaded)[0] + ".mp4",
+                downloaded,
+            ]
 
-            if "text/html" in content_type:
-                raise RuntimeError(
-                    "❌ Link នេះមិនមែនជា Direct Video Link ទេ។ "
-                    "ត្រូវប្រើ Link ដែលបើកជាវីដេអូ/MP4 ផ្ទាល់។"
-                )
+            found = next((x for x in candidates if os.path.exists(x)), None)
+            if not found:
+                # Find the newest media file created in the temp directory.
+                folder = os.path.dirname(output_path)
+                files = [
+                    os.path.join(folder, x)
+                    for x in os.listdir(folder)
+                    if x.lower().endswith((".mp4", ".webm", ".mkv", ".mov"))
+                ]
+                if files:
+                    found = max(files, key=os.path.getmtime)
 
-            total = 0
+            if not found:
+                raise RuntimeError("មិនរកឃើញវីដេអូដែលបាន Download ទេ។")
 
-            with open(output_path, "wb") as f:
-                while True:
-                    chunk = r.read(1024 * 1024)
-                    if not chunk:
-                        break
+            if found != output_path:
+                os.replace(found, output_path)
 
-                    total += len(chunk)
+    except Exception as e:
+        message = str(e)
+        raise RuntimeError(
+            "❌ មិនអាចទាញវីដេអូពី Link នេះបានទេ។\n\n" + message[-2500:]
+        ) from e
 
-                    if total > MAX_DOWNLOAD_MB * 1024 * 1024:
-                        raise RuntimeError(
-                            f"❌ វីដេអូលើស {MAX_DOWNLOAD_MB}MB។"
-                        )
-
-                    f.write(chunk)
-
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"❌ Website ឆ្លើយ HTTP {e.code}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"❌ មិនអាចភ្ជាប់ Website បាន: {e.reason}") from e
-
-    if total < 1000:
-        raise RuntimeError("❌ File តូចពេក ឬមិនមែនវីដេអូ។")
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+        raise RuntimeError("❌ វីដេអូ Download មិនបាន ឬ File ខូច។")
 
     try:
         ffmpeg(["-v", "error", "-i", output_path, "-f", "null", "-"])
     except Exception as e:
-        raise RuntimeError(
-            "❌ Link នេះមិនមែនជា Video File ដែលអាចអានបាន។"
-        ) from e
+        raise RuntimeError("❌ File ដែលបាន Download មិនមែនវីដេអូដែលអាចអានបានទេ។") from e
 
-    return total
+    return os.path.getsize(output_path)
 
 
 # ========================= UI =========================
@@ -351,17 +317,17 @@ st.link_button(
 )
 
 
-# ========================= DIRECT VIDEO DOWNLOAD =========================
+# ========================= WEB VIDEO DOWNLOAD =========================
 
 with st.expander("🎬 Download Video", expanded=False):
     st.caption(
-        "ដាក់ Direct Video URL ដែលអាចបើកជាវីដេអូបាន។ "
-        "ឧទាហរណ៍ Link .mp4។"
+        "ដាក់ Link ទំព័រវីដេអូ ដូចជា FlickReels ហើយចុច Download។ "
+        "កម្មវិធីនឹងព្យាយាមរកវីដេអូពីទំព័រនោះដោយស្វ័យប្រវត្តិ។"
     )
 
     video_url = st.text_input(
         "🔗 Video URL",
-        placeholder="https://example.com/video.mp4",
+        placeholder="https://www.flickreels.net/playlist/...",
     )
 
     if st.button("⬇️ Download Video", use_container_width=True):
@@ -372,8 +338,8 @@ with st.expander("🎬 Download Video", expanded=False):
                 with tempfile.TemporaryDirectory() as tmp:
                     output = os.path.join(tmp, "video.mp4")
 
-                    with st.spinner("⬇️ កំពុង Download..."):
-                        size = direct_download(
+                    with st.spinner("⬇️ កំពុងរក និង Download វីដេអូ..."):
+                        size = webpage_download(
                             video_url,
                             output,
                         )
@@ -579,4 +545,4 @@ if video:
             except Exception as e:
                 st.error("❌ Auto Caption មិនបាន")
                 st.warning(str(e))
-                
+
