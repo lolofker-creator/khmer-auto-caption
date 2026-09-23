@@ -2,4 +2,4 @@ streamlit
 google-genai
 imageio-ffmpeg
 huggingface_hub
-pillow
+Pillow
