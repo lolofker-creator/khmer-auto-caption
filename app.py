@@ -1,4 +1,7 @@
 import os, json, subprocess, tempfile, wave, base64, time, urllib.request, urllib.error
+import ipaddress
+import socket
+from urllib.parse import urlparse
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -7,6 +10,8 @@ import imageio_ffmpeg
 st.set_page_config(page_title="Smey Auto Caption", page_icon="🇰🇭", layout="centered")
 
 TELEGRAM_URL = "https://t.me/Smeytk"
+MAX_DOWNLOAD_MB = 500
+
 
 def ffmpeg(args):
     subprocess.run(
@@ -16,11 +21,13 @@ def ffmpeg(args):
         check=True,
     )
 
+
 def sec(v):
     try:
         return float(str(v).replace("s", ""))
     except Exception:
         return 0.0
+
 
 def words_from(interaction):
     out = []
@@ -30,6 +37,7 @@ def words_from(interaction):
                 if getattr(a, "type", None) == "word_info":
                     out.append(a)
     return out
+
 
 def groups_from(words, max_words=10, max_seconds=4.0):
     groups, cur = [], []
@@ -50,6 +58,7 @@ def groups_from(words, max_words=10, max_seconds=4.0):
     if cur:
         groups.append({"start": start, "end": end, "text": " ".join(cur)})
     return groups
+
 
 def translate(groups, client):
     if not groups:
@@ -110,6 +119,7 @@ def translate(groups, client):
 
     return [{**g, "text": t} for g, t in zip(groups, result)]
 
+
 def gemini_tts(text, out):
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
@@ -134,7 +144,6 @@ def gemini_tts(text, out):
         data = audio.data
 
         if isinstance(data, str):
-            import base64
             data = base64.b64decode(data)
 
         with wave.open(out, "wb") as wf:
@@ -148,6 +157,7 @@ def gemini_tts(text, out):
             "❌ Gemini មិនបានផ្ញើ Audio មកទេ។ "
             "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
         ) from e
+
 
 def hf_image(prompt, aspect_ratio="1:1", quality="Low"):
     """Generate an image through Hugging Face Inference Providers."""
@@ -203,7 +213,7 @@ def hf_image(prompt, aspect_ratio="1:1", quality="Low"):
             ) from e
         if "429" in message or "quota" in message.lower() or "credit" in message.lower():
             raise RuntimeError(
-                "❌ Hugging Face quota/credits មិនគ្រប់សម្រាប់ Image generation ទេ។\n\n"
+                "❌ Hugging Face quota/credits មិនគ្រប់សម្រាប់ Image generation ទេ.\n\n"
                 + message
             ) from e
         raise RuntimeError(f"❌ Hugging Face Image API Error: {message}") from e
@@ -213,9 +223,11 @@ def hf_image(prompt, aspect_ratio="1:1", quality="Low"):
     image.save(buffer, format="PNG")
     return buffer.getvalue()
 
+
 def duration(path):
     with wave.open(path, "rb") as w:
         return w.getnframes() / w.getframerate()
+
 
 def sync_clip(src, dst, slot):
     d = max(duration(src), 0.05)
@@ -234,6 +246,7 @@ def sync_clip(src, dst, slot):
         f = f"apad=pad_dur={slot-d:.3f},atrim=duration={slot:.3f}"
 
     ffmpeg(["-y", "-i", src, "-af", f, "-ar", "24000", "-ac", "1", dst])
+
 
 def dubbing(groups, out, tmp):
     clips = []
@@ -276,12 +289,14 @@ def dubbing(groups, out, tmp):
         ]
     )
 
+
 def ass_time(x):
     h = int(x // 3600)
     m = int(x % 3600 // 60)
     s = int(x % 60)
     cs = int((x - int(x)) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
 
 def make_ass(groups, path):
     header = """[Script Info]
@@ -308,6 +323,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"Khmer,,0,0,0,,{t}\n"
             )
 
+
 def burn(video, ass, out):
     a = ass.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
     ffmpeg([
@@ -322,6 +338,7 @@ def burn(video, ass, out):
         out,
     ])
 
+
 def replace_audio(video, audio, out):
     ffmpeg([
         "-y", "-i", video, "-i", audio,
@@ -334,6 +351,119 @@ def replace_audio(video, audio, out):
         out,
     ])
 
+
+# ---------- FREE / AUTHORIZED DIRECT VIDEO DOWNLOADER ----------
+
+def validate_download_url(url):
+    """Allow only normal public HTTP/HTTPS URLs; do not bypass protected streams."""
+    parsed = urlparse(url.strip())
+
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError("❌ URL ត្រូវចាប់ផ្តើមដោយ http:// ឬ https://")
+
+    if not parsed.hostname:
+        raise RuntimeError("❌ URL មិនត្រឹមត្រូវ។")
+
+    if parsed.port and parsed.port not in (80, 443):
+        raise RuntimeError("❌ អនុញ្ញាតតែ Port 80/443។")
+
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except Exception as e:
+        raise RuntimeError("❌ មិនអាចស្វែងរក Server របស់ Website នេះបាន។") from e
+
+    for item in addresses:
+        ip = ipaddress.ip_address(item[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise RuntimeError("❌ URL នេះមិនអាចប្រើសម្រាប់ Download បានទេ។")
+
+    return url.strip()
+
+
+def download_direct_video(url, output_path):
+    url = validate_download_url(url)
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 SmeyAutoCaption/1.0",
+            "Accept": "video/mp4,video/*,application/octet-stream;q=0.9,*/*;q=0.5",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            content_length = response.headers.get("Content-Length")
+
+            if content_length:
+                try:
+                    size = int(content_length)
+                    if size > MAX_DOWNLOAD_MB * 1024 * 1024:
+                        raise RuntimeError(
+                            f"❌ វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។"
+                        )
+                except ValueError:
+                    pass
+
+            if (
+                "text/html" in content_type
+                and not url.lower().split("?")[0].endswith((".mp4", ".mov", ".webm", ".mkv"))
+            ):
+                raise RuntimeError(
+                    "❌ Link នេះជាទំព័រ Website មិនមែនជា Direct Video File ទេ។\n"
+                    "សូមប្រើ Link ដែល Website អនុញ្ញាតឱ្យ Download ជា MP4/WebM/MOV។"
+                )
+
+            total = 0
+            chunk_size = 1024 * 1024
+
+            with open(output_path, "wb") as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+
+                    total += len(chunk)
+                    if total > MAX_DOWNLOAD_MB * 1024 * 1024:
+                        raise RuntimeError(
+                            f"❌ វីដេអូលើស {MAX_DOWNLOAD_MB}MB។"
+                        )
+
+                    f.write(chunk)
+
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"❌ Website បដិសេធ Download: HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"❌ មិនអាចភ្ជាប់ទៅ Website បាន: {e.reason}") from e
+
+    if total < 1000:
+        raise RuntimeError("❌ File ដែលបានទាញយកតូចពេក ឬមិនមែនវីដេអូ។")
+
+    # Verify that FFmpeg can read the downloaded file.
+    try:
+        ffmpeg([
+            "-v", "error",
+            "-i", output_path,
+            "-f", "null",
+            "-",
+        ])
+    except Exception as e:
+        raise RuntimeError(
+            "❌ File ដែលបាន Download មិនមែនជា Video ដែលអាចអានបាន។ "
+            "វាអាចជា webpage ឬ protected stream។"
+        ) from e
+
+    return total
+
+
 # ---------- UI ----------
 st.title("🇰🇭 Smey Auto Caption")
 st.caption("🇨🇳 Chinese → Auto Caption → Khmer → Gemini Voice → Auto Sync → MP4")
@@ -343,6 +473,50 @@ st.link_button(
     TELEGRAM_URL,
     use_container_width=True,
 )
+
+# ---------- VIDEO DOWNLOADER ----------
+with st.expander("🎬 Download រឿង/វីដេអូពី Website", expanded=False):
+    st.caption(
+        "សម្រាប់ Direct Video Link ដែល Website អនុញ្ញាតឱ្យ Download "
+        "(MP4 / WebM / MOV / file video)។ មិនរំលងការការពារ ឬ DRM ទេ។"
+    )
+
+    download_url = st.text_input(
+        "🔗 បញ្ចូល Video Download Link",
+        placeholder="https://example.com/video.mp4",
+        key="download_video_url",
+    )
+
+    if st.button("⬇️ Download Video", use_container_width=True):
+        if not download_url.strip():
+            st.warning("សូមបញ្ចូល Video Link ជាមុន។")
+        else:
+            try:
+                with tempfile.TemporaryDirectory() as dl_tmp:
+                    downloaded = os.path.join(dl_tmp, "smey_download.mp4")
+
+                    progress = st.progress(0, text="⬇️ កំពុង Download...")
+                    size = download_direct_video(download_url, downloaded)
+                    progress.progress(100, text="✅ Download រួចរាល់")
+
+                    data = open(downloaded, "rb").read()
+
+                    st.success(
+                        f"✅ បាន Download រួច — {size / (1024 * 1024):.1f} MB"
+                    )
+                    st.video(data)
+
+                    st.download_button(
+                        "⬇️ ទាញយក MP4",
+                        data=data,
+                        file_name="smey_download_video.mp4",
+                        mime="video/mp4",
+                        use_container_width=True,
+                    )
+
+            except Exception as e:
+                st.error("❌ Download មិនបាន")
+                st.warning(str(e))
 
 source = st.selectbox(
     "🌐 ភាសាដើម",
@@ -530,4 +704,3 @@ if video:
             except Exception as e:
                 st.error("❌ មានបញ្ហា")
                 st.exception(e)
-                
