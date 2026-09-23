@@ -231,78 +231,181 @@ def gemini_tts(text, output_path):
             "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
         ) from e
 
-def webpage_download(url, output_path):
-    url = url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise RuntimeError("❌ URL មិនត្រឹមត្រូវ។")
+def _find_media_urls(html):
+    """Find direct MP4/M3U8 URLs embedded in a webpage."""
+    import re
+    from html import unescape
 
+    text = unescape(html)
+    text = text.replace(r'\\/', '/')
+    text = text.replace(r'\/', '/')
+    text = text.replace(r'\u0026', '&')
+    text = text.replace(r'\u003A', ':')
+
+    patterns = [
+        r'https?://[^\"\'\s<>]+?\.m3u8(?:\?[^\"\'\s<>]*)?',
+        r'https?://[^\"\'\s<>]+?\.mp4(?:\?[^\"\'\s<>]*)?',
+        r'(?:(?:https?:)?//)[^\"\'\s<>]+?\.m3u8(?:\?[^\"\'\s<>]*)?',
+        r'(?:(?:https?:)?//)[^\"\'\s<>]+?\.mp4(?:\?[^\"\'\s<>]*)?',
+    ]
+
+    found = []
+    for pattern in patterns:
+        for url in re.findall(pattern, text, flags=re.I):
+            if url.startswith('//'):
+                url = 'https:' + url
+            url = url.rstrip('\\\'\".,);]')
+            if url not in found:
+                found.append(url)
+    return found
+
+
+def _download_media_url(media_url, output_path, referer=None):
+    """Download a direct MP4 or HLS/M3U8 URL with FFmpeg."""
+    headers = (
+        'User-Agent: Mozilla/5.0 (Linux; Android 10) '
+        'AppleWebKit/537.36 Chrome/120 Safari/537.36\r\n'
+    )
+    if referer:
+        headers += f'Referer: {referer}\r\n'
+
+    ffmpeg([
+        '-y',
+        '-headers', headers,
+        '-i', media_url,
+        '-map', '0:v:0?',
+        '-map', '0:a:0?',
+        '-c', 'copy',
+        '-movflags', '+faststart',
+        output_path,
+    ])
+
+
+def _page_media_download(url, output_path):
+    """Fallback: fetch page HTML and try embedded MP4/M3U8 URLs."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            'User-Agent': (
+                'Mozilla/5.0 (Linux; Android 10) '
+                'AppleWebKit/537.36 Chrome/120 Safari/537.36'
+            ),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        html = r.read().decode('utf-8', errors='ignore')
+
+    media_urls = _find_media_urls(html)
+    if not media_urls:
+        raise RuntimeError(
+            'ទំព័រនេះមិនបង្ហាញ MP4/M3U8 ជាសាធារណៈទេ។ '
+            'ប្រសិនបើវីដេអូត្រូវបានការពារ ឬបង្កើត URL តាម JavaScript/DRM '
+            'កម្មវិធីមិនអាចទាញវាបានទេ។'
+        )
+
+    last_error = None
+    for media_url in media_urls[:10]:
+        try:
+            _download_media_url(media_url, output_path, referer=url)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                return os.path.getsize(output_path)
+        except Exception as e:
+            last_error = e
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+
+    raise RuntimeError(
+        'រកឃើញ Video URL ប៉ុន្តែ Download មិនបាន។ '
+        + (str(last_error)[-1200:] if last_error else '')
+    )
+
+
+def webpage_download(url, output_path):
+    """Page URL -> try yt-dlp first, then embedded MP4/M3U8 fallback."""
+    url = url.strip()
+    if not url.startswith(('http://', 'https://')):
+        raise RuntimeError('❌ URL មិនត្រឹមត្រូវ។')
+
+    last_error = None
+
+    # 1) Try yt-dlp. It supports many sites and its generic extractor can
+    # sometimes find embedded players even when the site has no dedicated extractor.
     try:
         import yt_dlp
-    except ImportError as e:
-        raise RuntimeError(
-            "❌ yt-dlp មិនទាន់បានដំឡើង។ សូមបន្ថែម yt-dlp ក្នុង requirements.txt។"
-        ) from e
 
-    temp_template = output_path.replace(".mp4", ".%(ext)s")
+        temp_template = output_path.replace('.mp4', '.%(ext)s')
+        options = {
+            'format': 'bv*+ba/b',
+            'outtmpl': temp_template,
+            'merge_output_format': 'mp4',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'retries': 3,
+            'fragment_retries': 3,
+            'socket_timeout': 30,
+            'http_headers': {
+                'User-Agent': (
+                    'Mozilla/5.0 (Linux; Android 10) '
+                    'AppleWebKit/537.36 Chrome/120 Safari/537.36'
+                ),
+                'Referer': url,
+            },
+        }
 
-    options = {
-        "format": "bv*+ba/b",
-        "outtmpl": temp_template,
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "retries": 3,
-        "fragment_retries": 3,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        },
-    }
-
-    try:
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
-            downloaded = ydl.prepare_filename(info)
 
+            if info and info.get('_type') == 'playlist':
+                entries = [e for e in (info.get('entries') or []) if e]
+                if entries:
+                    info = entries[0]
+
+            downloaded = ydl.prepare_filename(info)
             candidates = [
                 output_path,
-                os.path.splitext(downloaded)[0] + ".mp4",
+                os.path.splitext(downloaded)[0] + '.mp4',
                 downloaded,
             ]
 
-            found = next((x for x in candidates if os.path.exists(x)), None)
-            if not found:
-                # Find the newest media file created in the temp directory.
-                folder = os.path.dirname(output_path)
-                files = [
-                    os.path.join(folder, x)
-                    for x in os.listdir(folder)
-                    if x.lower().endswith((".mp4", ".webm", ".mkv", ".mov"))
-                ]
-                if files:
-                    found = max(files, key=os.path.getmtime)
+            folder = os.path.dirname(output_path)
+            candidates += [
+                os.path.join(folder, name)
+                for name in os.listdir(folder)
+                if name.lower().endswith(('.mp4', '.webm', '.mkv', '.mov'))
+            ]
 
-            if not found:
-                raise RuntimeError("មិនរកឃើញវីដេអូដែលបាន Download ទេ។")
+            existing = [x for x in candidates if os.path.exists(x)]
+            if existing:
+                found = max(existing, key=os.path.getmtime)
+                if found != output_path:
+                    os.replace(found, output_path)
 
-            if found != output_path:
-                os.replace(found, output_path)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                return os.path.getsize(output_path)
 
     except Exception as e:
-        message = str(e)
-        raise RuntimeError(
-            "❌ មិនអាចទាញវីដេអូពី Link នេះបានទេ។\n\n" + message[-2500:]
-        ) from e
+        last_error = e
 
-    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
-        raise RuntimeError("❌ វីដេអូ Download មិនបាន ឬ File ខូច។")
-
+    # 2) Fallback for pages that expose an MP4/M3U8 in HTML/JSON.
     try:
-        ffmpeg(["-v", "error", "-i", output_path, "-f", "null", "-"])
+        return _page_media_download(url, output_path)
     except Exception as e:
-        raise RuntimeError("❌ File ដែលបាន Download មិនមែនវីដេអូដែលអាចអានបានទេ។") from e
+        if last_error:
+            raise RuntimeError(
+                '❌ មិនអាចរកវីដេអូពី Link នេះបានទេ។\n\n'
+                'សាកល្បងរក Video Player/MP4/M3U8 ក្នុងទំព័ររួចហើយ ប៉ុន្តែមិនអាចទាញបាន។\n\n'
+                + str(e)[-1800:]
+            ) from e
+        raise
 
-    return os.path.getsize(output_path)
+
 
 
 # ========================= UI =========================
@@ -545,4 +648,4 @@ if video:
             except Exception as e:
                 st.error("❌ Auto Caption មិនបាន")
                 st.warning(str(e))
-
+                
