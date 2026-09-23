@@ -836,7 +836,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         for group in groups:
             text = group["text"]
-               text = text.replace("\n", " ")
+            text = text.replace("\n", " ")
             text = text.replace("{", r"\{")
             text = text.replace("}", r"\}")
 
