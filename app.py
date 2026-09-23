@@ -464,14 +464,44 @@ Captions:
     for i, text in enumerate(texts, start=1):
         prompt += f"\n{i}. {text}"
 
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=list[str],
-        ),
-    )
+    # Translation model fallback:
+    # 3.5 Flash-Lite is used first for lightweight/high-volume translation.
+    # If it is temporarily unavailable, try 3.6 Flash.
+    models_to_try = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+    ]
+
+    response = None
+    last_error = None
+
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=list[str],
+                ),
+            )
+            break
+        except Exception as e:
+            last_error = e
+            error_text = str(e)
+
+            # 503 = temporary model unavailability/high demand.
+            # Try the next model instead of stopping the whole video.
+            if "503" in error_text or "UNAVAILABLE" in error_text:
+                continue
+
+            raise
+
+    if response is None:
+        raise RuntimeError(
+            "❌ Gemini Translation មិនអាចដំណើរការបានឥឡូវនេះ។ "
+            "ម៉ូដែលបកប្រែទាំងអស់កំពុងមិនអាចប្រើបានជាបណ្តោះអាសន្ន។"
+        ) from last_error
 
     translated = response.parsed
 
@@ -806,7 +836,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         for group in groups:
             text = group["text"]
-            text = text.replace("\n", " ")
+               text = text.replace("\n", " ")
             text = text.replace("{", r"\{")
             text = text.replace("}", r"\}")
 
