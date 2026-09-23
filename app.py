@@ -766,4 +766,608 @@ TRANSCRIPT:
             "type": "audio",
         },
         generation_config={
-            "speech_config"
+            "speech_config": [
+                {
+                    "voice": voice_name,
+                }
+            ]
+        },
+    )
+
+    if not interaction.output_audio:
+        raise ValueError(
+            "Gemini TTS មិនបានបញ្ជូនសំឡេងមកទេ។"
+        )
+
+    audio_data = base64.b64decode(
+        interaction.output_audio.data
+    )
+
+    with wave.open(
+        output_path,
+        "wb",
+    ) as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(audio_data)
+
+
+def create_dubbing_audio(
+    client,
+    groups,
+    output_path,
+    temp_dir,
+    voice_name,
+    dubbing_language,
+):
+    if not groups:
+        raise ValueError(
+            "មិនមាន Caption សម្រាប់ AI Dubbing ទេ។"
+        )
+
+    clip_paths = []
+
+    for index, group in enumerate(groups):
+        text = str(
+            group["text"]
+        ).strip()
+
+        if not text:
+            continue
+
+        clip_path = os.path.join(
+            temp_dir,
+            f"dub_{index:04d}.wav",
+        )
+
+        generate_tts_wav(
+            client,
+            text,
+            clip_path,
+            voice_name,
+            dubbing_language,
+        )
+
+        clip_paths.append((
+            clip_path,
+            float(group["start"]),
+        ))
+
+    if not clip_paths:
+        raise ValueError(
+            "មិនអាចបង្កើតសំឡេង AI បានទេ។"
+        )
+
+    inputs = []
+    filters = []
+    for index, (
+        clip_path,
+        start,
+    ) in enumerate(clip_paths):
+        inputs.extend([
+            "-i",
+            clip_path,
+        ])
+
+        delay_ms = max(
+            0,
+            int(start * 1000),
+        )
+
+        filters.append(
+            f"[{index}:a]"
+            f"adelay={delay_ms}:all=1"
+            f"[a{index}]"
+        )
+
+    labels = "".join(
+        f"[a{i}]"
+        for i in range(len(clip_paths))
+    )
+
+    filters.append(
+        f"{labels}"
+        f"amix="
+        f"inputs={len(clip_paths)}:"
+        f"duration=longest:"
+        f"dropout_transition=0:"
+        f"normalize=0"
+        f"[out]"
+    )
+
+    run_ffmpeg(
+        inputs
+        + [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[out]",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-y",
+            output_path,
+        ]
+    )
+
+
+def replace_audio(
+    video_path,
+    dubbed_audio_path,
+    output_path,
+):
+    run_ffmpeg([
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        dubbed_audio_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ])
+
+
+# =========================================================
+# ASS Subtitle
+# =========================================================
+
+def create_ass(
+    groups,
+    filename,
+):
+    header = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Khmer,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,3,1,2,50,50,220,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+    with open(
+        filename,
+        "w",
+        encoding="utf-8",
+    ) as f:
+        f.write(header)
+
+        for group in groups:
+            text = group["text"]
+            text = text.replace("\n", " ")
+            text = text.replace("{", r"\{")
+            text = text.replace("}", r"\}")
+
+            f.write(
+                f"Dialogue: 0,"
+                f"{ass_time(group['start'])},"
+                f"{ass_time(group['end'])},"
+                f"Khmer,,0,0,0,,"
+                f"{text}\n"
+            )
+
+
+def burn_caption(
+    video_path,
+    ass_path,
+    output_path,
+):
+    escaped_ass = (
+        ass_path
+        .replace("\\", "/")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+    )
+
+    run_ffmpeg([
+        "-y",
+        "-i",
+        video_path,
+        "-vf",
+        f"ass='{escaped_ass}'",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ])
+
+
+# =========================================================
+# Language Settings
+# =========================================================
+
+source_language = st.selectbox(
+    "🌐 ភាសាដើម",
+    [
+        "Auto Detect",
+        "🇰🇭 ខ្មែរ",
+        "🇬🇧 English",
+        "🇨🇳 中文",
+        "🇻🇳 Tiếng Việt",
+        "🇰🇷 한국어",
+        "🇯🇵 日本語",
+    ],
+)
+
+target_language = st.selectbox(
+    "🎯 បកប្រែទៅជា",
+    [
+        "មិនបកប្រែ",
+        "🇰🇭 ខ្មែរ",
+        "🇬🇧 English",
+        "🇨🇳 中文",
+        "🇻🇳 Tiếng Việt",
+        "🇰🇷 한국어",
+        "🇯🇵 日本語",
+    ],
+)
+
+
+# =========================================================
+# AI Dubbing Settings
+# =========================================================
+
+st.subheader("🎙️ AI Dubbing")
+
+enable_dubbing = st.checkbox(
+    "បើក AI Dubbing",
+)
+
+dubbing_language = st.selectbox(
+    "🗣️ ភាសាសំឡេង AI",
+    [
+        "🇰🇭 ខ្មែរ",
+        "🇬🇧 English",
+        "🇨🇳 中文",
+        "🇻🇳 Tiếng Việt",
+        "🇰🇷 한국어",
+        "🇯🇵 日本語",
+    ],
+    disabled=not enable_dubbing,
+)
+
+voice_label = st.selectbox(
+    "🎤 សម្លេង AI",
+    list(TTS_VOICES.keys()),
+    disabled=(
+        not enable_dubbing
+        or dubbing_language == "🇰🇭 ខ្មែរ"
+    ),
+)
+
+if enable_dubbing:
+    st.info(
+        "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
+        "ហើយជំនួសសំឡេងដើម។"
+    )
+
+    if dubbing_language == "🇰🇭 ខ្មែរ":
+        st.caption(
+            "🇰🇭 សំឡេងខ្មែរ ប្រើ Doslarb — Sovann"
+        )
+
+
+# =========================================================
+# Video Upload
+# =========================================================
+
+video = st.file_uploader(
+    "🎥 ជ្រើសវីដេអូ",
+    type=[
+        "mp4",
+        "mov",
+        "mkv",
+        "webm",
+    ],
+)
+
+
+# =========================================================
+# Process
+# =========================================================
+
+if video is not None:
+
+    caption_clicked = st.button(
+        "⚡ បង្កើត Caption",
+        use_container_width=True,
+    )
+
+    dubbing_clicked = st.button(
+        "🎙️ AI Dubbing",
+        use_container_width=True,
+    )
+
+    if caption_clicked or dubbing_clicked:
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            video_path = os.path.join(
+                temp_dir,
+                "input.mp4",
+            )
+
+            audio_path = os.path.join(
+                temp_dir,
+                "audio.wav",
+            )
+
+            ass_path = os.path.join(
+                temp_dir,
+                "khmer_caption.ass",
+            )
+
+            dubbed_audio_path = os.path.join(
+                temp_dir,
+                "dubbed_audio.m4a",
+            )
+
+            output_path = os.path.join(
+                temp_dir,
+                "smey_auto_caption.mp4",
+            )
+
+            with open(
+                video_path,
+                "wb",
+            ) as f:
+                f.write(
+                    video.getbuffer()
+                )
+
+            try:
+
+                # ---------------------------------
+                # Extract Audio
+                # ---------------------------------
+
+                with st.spinner(
+                    "⚡ កំពុងដកសំឡេង..."
+                ):
+                    extract_audio(
+                        video_path,
+                        audio_path,
+                    )
+
+
+                # ---------------------------------
+                # Gemini Transcription
+                # ---------------------------------
+
+                with st.spinner(
+                    "🎙️ Gemini កំពុងស្តាប់សំឡេង..."
+                ):
+
+                    client = genai.Client(
+                        api_key=st.secrets[
+                            "GEMINI_API_KEY"
+                        ]
+                    )
+
+                    audio_file = client.files.upload(
+                        file=audio_path,
+                    )
+
+                    language_codes = []
+
+                    language_code_map = {
+                        "🇰🇭 ខ្មែរ": "km-KH",
+                        "🇬🇧 English": "en-US",
+                        "🇨🇳 中文": "zh-CN",
+                        "🇻🇳 Tiếng Việt": "vi-VN",
+                        "🇰🇷 한국어": "ko-KR",
+                        "🇯🇵 日本語": "ja-JP",
+                    }
+
+                    if source_language != "Auto Detect":
+                        language_codes = [
+                            language_code_map[
+                                source_language
+                            ]
+                        ]
+
+                    interaction = client.interactions.create(
+                        model="gemini-3.5-transcribe",
+                        input=[
+                            {
+                                "type": "audio",
+                                "uri": audio_file.uri,
+                                "mime_type": audio_file.mime_type,
+                            }
+                        ],
+                        generation_config={
+                            "transcription_config": {
+                                "language_codes": language_codes,
+                                "mode": {
+                                    "type": "verbatim",
+                                    "timestamp_granularities": [
+                                        "word"
+                                    ],
+                                },
+                            }
+                        },
+                    )
+
+                    words = get_words(
+                        interaction
+                    )
+
+                    groups = make_groups(
+                        words,
+                        max_words=5,
+                        max_duration=2.0,
+                    )
+
+                    if not groups:
+                        st.error(
+                            "❌ Gemini មិនបានរកឃើញ Caption timestamps ទេ។"
+                        )
+                        st.stop()
+
+
+                # ---------------------------------
+                # Auto Translate
+                # ---------------------------------
+
+                if target_language != "មិនបកប្រែ":
+                    with st.spinner(
+                        "🌐 Gemini កំពុងបកប្រែ Caption..."
+                    ):
+                        groups = translate_captions(
+                            client,
+                            groups,
+                            source_language,
+                            target_language,
+                        )
+
+
+                # ---------------------------------
+                # Caption ONLY
+                # ---------------------------------
+
+                if caption_clicked:
+
+                    ass_path = os.path.join(
+                        temp_dir,
+                        "khmer_caption.ass",
+                    )
+
+                    caption_video_path = os.path.join(
+                        temp_dir,
+                        "caption_video.mp4",
+                    )
+
+                    create_ass(
+                        groups,
+                        ass_path,
+                    )
+
+                    with st.spinner(
+                        "🎬 កំពុងដាក់ Caption ជាប់ក្នុងវីដេអូ..."
+                    ):
+                        burn_caption(
+                            video_path,
+                            ass_path,
+                            output_path,
+                        )
+
+
+                # ---------------------------------
+                # AI Dubbing ONLY
+                # ---------------------------------
+
+                if dubbing_clicked:
+
+                    if not enable_dubbing:
+                        st.warning(
+                            "⚠️ សូមបើក AI Dubbing ជាមុនសិន។"
+                        )
+                        st.stop()
+
+                    if target_language == "មិនបកប្រែ":
+                        st.warning(
+                            "⚠️ សូមជ្រើសភាសានៅ "
+                            "'បកប្រែទៅជា' សម្រាប់ AI Dubbing។"
+                        )
+                        st.stop()
+
+                    if target_language != dubbing_language:
+                        st.warning(
+                            "⚠️ 'បកប្រែទៅជា' និង "
+                            "'ភាសាសំឡេង AI' ត្រូវជ្រើសភាសាដូចគ្នា។"
+                        )
+                        st.stop()
+
+                    with st.spinner(
+                        "🎙️ កំពុងបង្កើតសំឡេង AI..."
+                    ):
+
+                        if dubbing_language == "🇰🇭 ខ្មែរ":
+                            voice_name = "Sovann"
+                        else:
+                            voice_name = TTS_VOICES[
+                                voice_label
+                            ]
+
+                        create_dubbing_audio(
+                            client,
+                            groups,
+                            dubbed_audio_path,
+                            temp_dir,
+                            voice_name,
+                            dubbing_language,
+                        )
+
+                    with st.spinner(
+                        "🔊 កំពុងជំនួសសំឡេងដើម..."
+                    ):
+                        replace_audio(
+                            video_path,
+                            dubbed_audio_path,
+                            output_path,
+                        )
+
+
+                # ---------------------------------
+                # Output
+                # ---------------------------------
+
+                with open(
+                    output_path,
+                    "rb",
+                ) as f:
+                    output_data = f.read()
+
+                st.success(
+                    "✅ វីដេអូរួចរាល់!"
+                )
+
+                st.video(
+                    output_data
+                )
+
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូ MP4",
+                    data=output_data,
+                    file_name="smey_auto_caption.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
+                    on_click="ignore",
+                )
+
+            except Exception as e:
+
+                st.error(
+                    "❌ មានបញ្ហាពេលបង្កើតវីដេអូ"
+                )
+
+                st.exception(e)
