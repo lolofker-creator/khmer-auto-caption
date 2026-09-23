@@ -3,7 +3,6 @@ import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-from gradio_client import Client, handle_file
 
 st.set_page_config(page_title="Smey Auto Caption", page_icon="🇰🇭", layout="centered")
 
@@ -282,55 +281,44 @@ def replace_audio(video, audio, out):
         out,
     ])
 
-
-def muse_talk_lipsync(video_path, audio_path, out_path):
-    """
-    Send the original video + new AI audio to the public MuseTalk 1.5
-    ZeroGPU Space and return a lip-synced MP4.
-    """
-    try:
-        client = Client("henrybit/musetalk-1-5")
-        result = client.predict(
-            handle_file(audio_path),
-            handle_file(video_path),
-            0,      # bbox_shift
-            10,     # extra_margin
-            "jaw",  # parsing_mode
-            90,     # left_cheek_width
-            90,     # right_cheek_width
-            api_name="/generate",
-        )
-
-        result_video = result[0] if isinstance(result, (list, tuple)) else result
-
-        if not result_video:
-            raise RuntimeError("MuseTalk មិនបានបញ្ជូនវីដេអូត្រឡប់មកទេ។")
-
-        # gradio_client normally returns a local downloaded file path.
-        if isinstance(result_video, str) and os.path.exists(result_video):
-            with open(result_video, "rb") as src, open(out_path, "wb") as dst:
-                dst.write(src.read())
-        else:
-            raise RuntimeError(f"MuseTalk output មិនអាចអានបាន: {result_video}")
-
-        return out_path
-
-    except Exception as e:
-        raise RuntimeError(
-            "❌ Lip Sync មិនបានជោគជ័យ។ "
-            "MuseTalk អាចកំពុងរង់ចាំ GPU ឬ Space មិនទាន់រួចរាល់។ "
-            f"ព័ត៌មាន: {e}"
-        )
-
 # ---------- UI ----------
 st.title("🇰🇭 Smey Auto Caption")
-st.caption("🇨🇳 Chinese / 🇰🇭 Khmer / 🇬🇧 English → Auto Caption → Khmer → Sovann → 👄 Lip Sync → MP4")
+st.caption("🇨🇳 Chinese → Auto Caption → Khmer → Sovann → Auto Sync → MP4")
 
 st.link_button(
     "📱 ទាក់ទងម្ចាស់តាម Telegram",
     TELEGRAM_URL,
     use_container_width=True,
 )
+
+# ---------- Sovann Voice Test ----------
+st.subheader("🎧 សាកសំឡេង Sovann")
+st.caption("វាយប្រយោគខ្មែរខ្លីៗ រួចចុចប៊ូតុង ដើម្បីស្តាប់សំឡេងមុនយកទៅ Dubbing។")
+test_text = st.text_area(
+    "📝 អត្ថបទសម្រាប់សាក",
+    value="សួស្តីបងប្អូន! ថ្ងៃនេះយើងមកសាកសំឡេង Sovann។",
+    height=90,
+    max_chars=1200,
+)
+
+if st.button("🔊 សាកសំឡេង Sovann", use_container_width=True):
+    if not test_text.strip():
+        st.warning("⚠️ សូមបញ្ចូលអត្ថបទសិន។")
+    else:
+        try:
+            with tempfile.TemporaryDirectory() as test_tmp:
+                test_wav = os.path.join(test_tmp, "sovann_test.wav")
+                with st.spinner("🎙️ កំពុងបង្កើតសំឡេង Sovann..."):
+                    doslarb_tts(test_text.strip(), test_wav)
+                audio_data = open(test_wav, "rb").read()
+                st.success("✅ បានបង្កើតសំឡេងរួចរាល់!")
+                st.audio(audio_data, format="audio/wav")
+        except Exception as e:
+            if "429" in str(e):
+                st.error("❌ Doslarb API Request អស់ហើយ (120/120)។ ត្រូវរង់ចាំ quota reset ឬប្តូរ plan មុនសាកសំឡេង។")
+            else:
+                st.error("❌ សាកសំឡេងមិនបាន")
+                st.exception(e)
 
 source = st.selectbox(
     "🌐 ភាសាដើម",
@@ -344,7 +332,7 @@ translate_to_kh = st.checkbox(
 )
 
 dub = st.checkbox(
-    "🎙️ AI Dubbing — Sovann + 👄 Lip Sync",
+    "🎙️ AI Dubbing — Sovann",
     value=False,
 )
 
@@ -356,7 +344,7 @@ video = st.file_uploader(
 if video:
     c1, c2 = st.columns(2)
     caption_btn = c1.button("⚡ Auto Caption", use_container_width=True)
-    dub_btn = c2.button("🎙️ Dubbing + Lip Sync", use_container_width=True)
+    dub_btn = c2.button("🎙️ Dubbing + Sync", use_container_width=True)
 
     if caption_btn or dub_btn:
         with tempfile.TemporaryDirectory() as tmp:
@@ -420,8 +408,7 @@ if video:
                 else:
                     with st.spinner("🔊 កំពុងបង្កើតសំឡេង Sovann + Auto Sync..."):
                         dubbing(groups, da, tmp)
-                    with st.spinner("👄 កំពុងធ្វើ AI Lip Sync ឱ្យមាត់ត្រូវនឹងសំឡេង..."):
-                        muse_talk_lipsync(vp, da, out)
+                    replace_audio(vp, da, out)
 
                 data = open(out, "rb").read()
 
