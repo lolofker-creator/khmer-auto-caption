@@ -44,49 +44,84 @@ def sec(v):
         return 0.0
 
 
+def _add_word(words, item):
+    """Add a Gemini word_info object/dict when it has usable offsets."""
+    def get(obj, *names):
+        for name in names:
+            if isinstance(obj, dict) and name in obj:
+                return obj[name]
+            value = getattr(obj, name, None)
+            if value is not None:
+                return value
+        return None
+
+    word = get(item, "text", "word")
+    start = get(item, "start_offset", "startOffset")
+    end = get(item, "end_offset", "endOffset")
+    if word and start is not None and end is not None:
+        words.append({
+            "text": str(word).strip(),
+            "start": sec(start),
+            "end": sec(end),
+        })
+
+
 def words_from(response):
-    """Read Gemini word-level timestamps from the actual AudioTranscription
-    response. Gemini returns words under candidate -> content -> part ->
-    audio_transcription -> words, not under annotations/steps.
-    """
+    """Support both the current word_info annotation shape and older SDK shapes."""
     words = []
 
-    try:
-        candidates = getattr(response, "candidates", None) or []
-        for candidate in candidates:
-            content = getattr(candidate, "content", None)
-            parts = getattr(content, "parts", None) if content else None
-            for part in parts or []:
-                transcription = getattr(part, "audio_transcription", None)
-                if transcription is None:
-                    transcription = getattr(part, "audioTranscription", None)
-                if transcription is None:
-                    continue
+    def walk(obj, depth=0):
+        if obj is None or depth > 8:
+            return
+        if isinstance(obj, (str, bytes, int, float, bool)):
+            return
 
-                items = getattr(transcription, "words", None) or []
-                for item in items:
-                    word = getattr(item, "word", None)
-                    if word is None:
-                        word = getattr(item, "text", None)
+        if isinstance(obj, dict):
+            if obj.get("type") == "word_info":
+                _add_word(words, obj)
+                return
+            for k, v in obj.items():
+                if k in {"annotations", "parts", "content", "steps", "candidates", "output"}:
+                    walk(v, depth + 1)
+            return
 
-                    start = getattr(item, "start_offset", None)
-                    if start is None:
-                        start = getattr(item, "startOffset", None)
+        typ = getattr(obj, "type", None)
+        if typ == "word_info":
+            _add_word(words, obj)
+            return
 
-                    end = getattr(item, "end_offset", None)
-                    if end is None:
-                        end = getattr(item, "endOffset", None)
+        for attr in ("annotations", "parts", "content", "steps", "candidates", "output"):
+            try:
+                v = getattr(obj, attr, None)
+            except Exception:
+                v = None
+            if v is not None:
+                walk(v, depth + 1)
 
-                    if word and start is not None and end is not None:
-                        words.append({
-                            "text": str(word).strip(),
-                            "start": sec(start),
-                            "end": sec(end),
-                        })
-    except Exception:
-        pass
+    walk(response)
 
-    return words
+    # Remove accidental duplicates while preserving timing order.
+    unique = []
+    seen = set()
+    for w in words:
+        key = (w["text"], round(w["start"], 3), round(w["end"], 3))
+        if key not in seen:
+            seen.add(key)
+            unique.append(w)
+    unique.sort(key=lambda x: (x["start"], x["end"]))
+    return unique
+
+
+def detect_source_language(words):
+    """Fast local detection for the two requested source languages."""
+    text = "".join(w.get("text", "") for w in words)
+    khmer = sum(1 for ch in text if "\u1780" <= ch <= "\u17ff")
+    chinese = sum(1 for ch in text if "\u3400" <= ch <= "\u4dbf" or "\u4e00" <= ch <= "\u9fff")
+    if khmer > chinese and khmer >= 3:
+        return "🇰🇭 ខ្មែរ"
+    if chinese > khmer and chinese >= 3:
+        return "🇨🇳 中文"
+    return "🤖 មិនប្រាកដ"
 
 def make_groups(words, max_words=10, max_seconds=4):
     groups = []
@@ -125,27 +160,30 @@ def make_groups(words, max_words=10, max_seconds=4):
 
     return groups
 
-def translate_to_khmer(groups, client, source):
-    if source == "🇰🇭 ខ្មែរ" or not groups:
+def translate_groups(groups, client, source_label, target_label):
+    if not groups or target_label == "🚫 មិនបកប្រែ":
         return groups
 
+    # No translation needed when source and target are the same.
+    if source_label == target_label:
+        return groups
+
+    target_name = "Khmer" if target_label == "🇰🇭 ខ្មែរ" else "Chinese (Simplified)"
+    source_name = "Khmer" if source_label == "🇰🇭 ខ្មែរ" else "Chinese"
     result = []
 
-    for i in range(0, len(groups), 10):
-        batch = groups[i:i + 10]
+    # Larger batches reduce API round-trips and make the app noticeably faster.
+    for i in range(0, len(groups), 30):
+        batch = groups[i:i + 30]
         prompt = (
-            f"Translate these {source} captions into natural Khmer. "
-            "Return ONLY a JSON array, exactly one Khmer string per input, "
-            "same order. Do not explain.\n\n"
-            + "\n".join(
-                f"{n + 1}. {g['text']}"
-                for n, g in enumerate(batch)
-            )
+            f"Translate these {source_name} captions into natural {target_name}. "
+            "Return ONLY a JSON array, exactly one string per input, same order. "
+            "Do not explain. Keep names and meaning accurate.\n\n"
+            + "\n".join(f"{n + 1}. {g['text']}" for n, g in enumerate(batch))
         )
 
         answer = None
-
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 r = client.models.generate_content(
                     model="gemini-3.5-flash-lite",
@@ -162,18 +200,13 @@ def translate_to_khmer(groups, client, source):
                 if "429" not in str(e) and "RESOURCE_EXHAUSTED" not in str(e):
                     raise
                 import time
-                time.sleep(10)
+                time.sleep(5)
 
         if answer is None:
             answer = [g["text"] for g in batch]
-
         result.extend(answer)
 
-    return [
-        {**g, "text": text}
-        for g, text in zip(groups, result)
-    ]
-
+    return [{**g, "text": text} for g, text in zip(groups, result)]
 
 def ass_time(x):
     h = int(x // 3600)
@@ -628,18 +661,23 @@ if st.button(
 # ========================= AUTO CAPTION =========================
 
 source = st.selectbox(
-    "🌐 ភាសាដើម",
+    "🌐 ភាសាដើមក្នុងវីដេអូ",
     [
+        "🤖 ស្វ័យប្រវត្តិ — ចិន / ខ្មែរ",
         "🇨🇳 中文",
         "🇰🇭 ខ្មែរ",
-        "🇬🇧 English",
     ],
     index=0,
 )
 
-translate = st.checkbox(
-    "🇰🇭 បកប្រែ Caption ទៅខ្មែរ",
-    value=True,
+target = st.selectbox(
+    "🔄 បកប្រែទៅ",
+    [
+        "🇰🇭 ខ្មែរ",
+        "🇨🇳 中文",
+        "🚫 មិនបកប្រែ",
+    ],
+    index=0,
 )
 
 video = st.file_uploader(
@@ -679,11 +717,13 @@ if video:
                 with st.spinner("🎙️ Gemini កំពុងស្តាប់សំឡេង..."):
                     audio_file = client.files.upload(file=audio_path)
 
-                    lang = {
-                        "🇨🇳 中文": "zh-CN",
-                        "🇰🇭 ខ្មែរ": "km-KH",
-                        "🇬🇧 English": "en-US",
-                    }[source]
+                    # Auto mode: omit language_codes so Gemini detects Chinese/Khmer itself.
+                    if source == "🇨🇳 中文":
+                        language_codes = ["cmn-Hans-CN"]
+                    elif source == "🇰🇭 ខ្មែរ":
+                        language_codes = ["km-KH"]
+                    else:
+                        language_codes = []
 
                     response = client.models.generate_content(
                         model="gemini-3.5-transcribe",
@@ -692,7 +732,7 @@ if video:
                             audio_transcription_config=(
                                 types.AudioTranscriptionConfig(
                                     word_timestamp=True,
-                                    language_codes=[lang],
+                                    language_codes=language_codes,
                                 )
                             )
                         ),
@@ -711,13 +751,12 @@ if video:
 
                 groups = make_groups(words)
 
-                if translate and source != "🇰🇭 ខ្មែរ":
-                    with st.spinner("🇰🇭 កំពុងបកប្រែទៅខ្មែរ..."):
-                        groups = translate_to_khmer(
-                            groups,
-                            client,
-                            source,
-                        )
+                detected = detect_source_language(words) if source.startswith("🤖") else source
+                st.info(f"🌐 ភាសាដែលរកឃើញ: {detected}")
+
+                if target != "🚫 មិនបកប្រែ" and detected in {"🇨🇳 中文", "🇰🇭 ខ្មែរ"} and detected != target:
+                    with st.spinner(f"🔄 កំពុងបកប្រែទៅ {target}..."):
+                        groups = translate_groups(groups, client, detected, target)
 
                 st.subheader("📝 Caption")
 
