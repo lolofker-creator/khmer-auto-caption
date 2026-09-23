@@ -8,25 +8,25 @@ import urllib.request
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timezone
 
 import requests
-
 import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
 
 
-
 # =========================================================
-# ACCOUNT / SUBSCRIPTION SYSTEM
+# OWNER-ONLY ACCOUNT SYSTEM
 # =========================================================
 
 SUPABASE_URL = str(st.secrets.get("SUPABASE_URL", "")).rstrip("/")
 SUPABASE_KEY = str(st.secrets.get("SUPABASE_KEY", ""))
 ADMIN_USERNAME = str(st.secrets.get("ADMIN_USERNAME", ""))
 ADMIN_PASSWORD = str(st.secrets.get("ADMIN_PASSWORD", ""))
+TELEGRAM_URL = "https://t.me/Smeytk"
 
 
 def supabase_headers():
@@ -70,12 +70,11 @@ def verify_password(password, stored):
 
 
 def get_account(username):
-    url = f"{SUPABASE_URL}/rest/v1/accounts"
     response = requests.get(
-        url,
+        f"{SUPABASE_URL}/rest/v1/accounts",
         headers=supabase_headers(),
         params={
-            "select": "id,username,password_hash,plan,expires_at,active,created_at",
+            "select": "id,username,password_hash,active,created_at",
             "username": f"eq.{username}",
             "limit": "1",
         },
@@ -87,12 +86,11 @@ def get_account(username):
 
 
 def list_accounts():
-    url = f"{SUPABASE_URL}/rest/v1/accounts"
     response = requests.get(
-        url,
+        f"{SUPABASE_URL}/rest/v1/accounts",
         headers=supabase_headers(),
         params={
-            "select": "id,username,plan,expires_at,active,created_at",
+            "select": "id,username,active,created_at",
             "order": "created_at.desc",
         },
         timeout=20,
@@ -101,7 +99,7 @@ def list_accounts():
     return response.json()
 
 
-def create_account(username, password, plan, days):
+def create_account(username, password):
     username = username.strip()
     if not username or not password:
         raise ValueError("សូមបំពេញ Username និង Password។")
@@ -109,12 +107,13 @@ def create_account(username, password, plan, days):
     if get_account(username):
         raise ValueError("Username នេះមានរួចហើយ។")
 
-    expires = datetime.now(timezone.utc) + timedelta(days=days)
+    # The existing Supabase table has plan/expires_at as required columns.
+    # They are kept only for database compatibility and are NOT used by the app.
     payload = {
         "username": username,
         "password_hash": hash_password(password),
-        "plan": plan,
-        "expires_at": expires.isoformat(),
+        "plan": "STANDARD",
+        "expires_at": "2099-12-31T23:59:59+00:00",
         "active": True,
     }
 
@@ -140,49 +139,6 @@ def update_account_status(account_id, active):
     response.raise_for_status()
 
 
-def extend_account(account_id, current_expires, days):
-    try:
-        current = datetime.fromisoformat(
-            current_expires.replace("Z", "+00:00")
-        )
-    except Exception:
-        current = datetime.now(timezone.utc)
-
-    now = datetime.now(timezone.utc)
-    base = max(current, now)
-    new_expiry = base + timedelta(days=days)
-
-    response = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/accounts",
-        headers={**supabase_headers(), "Prefer": "return=representation"},
-        params={"id": f"eq.{account_id}"},
-        json={"expires_at": new_expiry.isoformat(), "active": True},
-        timeout=20,
-    )
-    response.raise_for_status()
-    return new_expiry
-
-
-def is_account_valid(account):
-    if not account or not account.get("active"):
-        return False
-    try:
-        expiry = datetime.fromisoformat(
-            account["expires_at"].replace("Z", "+00:00")
-        )
-        return expiry > datetime.now(timezone.utc)
-    except Exception:
-        return False
-
-
-def format_expiry(value):
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return dt.astimezone().strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        return str(value)
-
-
 def show_login():
     st.title("🔐 Smey Auto Caption")
     st.subheader("ចូលប្រើ Account")
@@ -190,17 +146,21 @@ def show_login():
     with st.form("login_form"):
         username = st.text_input("👤 Username")
         password = st.text_input("🔑 Password", type="password")
-        submitted = st.form_submit_button(
-            "ចូលប្រើ",
-            use_container_width=True,
-        )
+        submitted = st.form_submit_button("ចូលប្រើ", use_container_width=True)
+
+    st.link_button(
+        "📱 ទាក់ទងម្ចាស់តាម Telegram",
+        TELEGRAM_URL,
+        use_container_width=True,
+    )
+    st.caption("មិនមាន Account? សូមទាក់ទងម្ចាស់កម្មវិធី ដើម្បីឲ្យម្ចាស់បង្កើត Account ឲ្យ។")
 
     if submitted:
         if not username or not password:
             st.error("សូមបំពេញ Username និង Password។")
             return
 
-        # Admin login is kept in Streamlit Secrets, never in GitHub code.
+        # Owner/Admin credentials live only in Streamlit Secrets.
         if ADMIN_USERNAME and ADMIN_PASSWORD:
             if (
                 hmac.compare_digest(username, ADMIN_USERNAME)
@@ -208,10 +168,7 @@ def show_login():
             ):
                 st.session_state.logged_in = True
                 st.session_state.is_admin = True
-                st.session_state.account = {
-                    "username": ADMIN_USERNAME,
-                    "plan": "ADMIN",
-                }
+                st.session_state.account = {"username": ADMIN_USERNAME}
                 st.rerun()
                 return
 
@@ -224,8 +181,8 @@ def show_login():
                 st.error("❌ Username ឬ Password មិនត្រឹមត្រូវ។")
                 return
 
-            if not is_account_valid(account):
-                st.error("⛔ Account នេះផុតកំណត់ ឬត្រូវបានបិទ។")
+            if not account.get("active", False):
+                st.error("⛔ Account នេះត្រូវបានបិទ។")
                 return
 
             st.session_state.logged_in = True
@@ -234,30 +191,27 @@ def show_login():
             st.rerun()
         except Exception as e:
             st.error("❌ មិនអាចភ្ជាប់ទៅ Account Database បានទេ។")
+            st.caption("បើមានបញ្ហា DNS/Supabase សូមពិនិត្យ Supabase API URL។")
             st.exception(e)
 
 
 def show_admin_panel():
     st.title("👑 Smey Auto Caption — Admin")
-    st.caption("អ្នកអាចបង្កើត និងគ្រប់គ្រង Account អតិថិជននៅទីនេះ។")
+    st.caption("មានតែម្ចាស់កម្មវិធីប៉ុណ្ណោះដែលអាចបង្កើត Account ឲ្យអ្នកប្រើ។")
 
-    if st.button("🚪 ចាកចេញ", key="admin_logout"):
+    c1, c2 = st.columns(2)
+    if c1.button("📱 Telegram របស់ម្ចាស់", use_container_width=True):
+        st.link_button("បើក Telegram", TELEGRAM_URL, use_container_width=True)
+    if c2.button("🚪 ចាកចេញ", key="admin_logout", use_container_width=True):
         st.session_state.clear()
         st.rerun()
 
     st.divider()
     st.subheader("➕ បង្កើត Account ថ្មី")
 
-    plans = {
-        "$1.99 — 1 ខែ": ("1_MONTH", 30),
-        "$5 — 3 ខែ": ("3_MONTHS", 90),
-        "$100 — 1 ឆ្នាំ": ("1_YEAR", 365),
-    }
-
     with st.form("create_account_form"):
         username = st.text_input("👤 Username ថ្មី")
         password = st.text_input("🔑 Password ថ្មី", type="password")
-        plan_label = st.selectbox("💵 ជ្រើសកញ្ចប់", list(plans.keys()))
         create_clicked = st.form_submit_button(
             "បង្កើត Account",
             use_container_width=True,
@@ -265,20 +219,9 @@ def show_admin_panel():
 
     if create_clicked:
         try:
-            plan, days = plans[plan_label]
-            account = create_account(
-                username,
-                password,
-                plan,
-                days,
-            )
-            st.success(
-                f"✅ បង្កើត Account `{username.strip()}` រួចរាល់។"
-            )
-            st.info(
-                "Username និង Password ខាងលើ សូមផ្ញើឲ្យអតិថិជនដោយផ្ទាល់។"
-            )
-            st.write("ថ្ងៃផុតកំណត់:", format_expiry(account["expires_at"]))
+            account = create_account(username, password)
+            st.success(f"✅ បង្កើត Account `{username.strip()}` រួចរាល់។")
+            st.info("សូមផ្ញើ Username និង Password ឲ្យអ្នកប្រើដោយផ្ទាល់។")
         except Exception as e:
             st.error("❌ មិនអាចបង្កើត Account បានទេ។")
             st.exception(e)
@@ -293,80 +236,31 @@ def show_admin_panel():
             return
 
         for account in accounts:
-            valid = is_account_valid(account)
-            status = "🟢 កំពុងប្រើ" if valid else "🔴 ផុតកំណត់/បិទ"
-
-            with st.expander(
-                f"👤 {account['username']} — {status}"
-            ):
-                st.write("កញ្ចប់:", account["plan"])
-                st.write(
-                    "ផុតកំណត់:",
-                    format_expiry(account["expires_at"]),
-                )
-
+            status = "🟢 កំពុងប្រើ" if account.get("active") else "🔴 បិទ"
+            with st.expander(f"👤 {account['username']} — {status}"):
                 c1, c2 = st.columns(2)
-
                 if account.get("active"):
-                    if c1.button(
-                        "🚫 បិទ Account",
-                        key=f"disable_{account['id']}",
-                    ):
+                    if c1.button("🚫 បិទ Account", key=f"disable_{account['id']}"):
                         try:
-                            update_account_status(
-                                account["id"],
-                                False,
-                            )
+                            update_account_status(account["id"], False)
                             st.rerun()
                         except Exception as e:
                             st.error(str(e))
                 else:
-                    if c1.button(
-                        "✅ បើក Account",
-                        key=f"enable_{account['id']}",
-                    ):
+                    if c1.button("✅ បើក Account", key=f"enable_{account['id']}"):
                         try:
-                            update_account_status(
-                                account["id"],
-                                True,
-                            )
+                            update_account_status(account["id"], True)
                             st.rerun()
                         except Exception as e:
                             st.error(str(e))
-
-                extension_options = {
-                    "បន្ត 1 ខែ": 30,
-                    "បន្ត 3 ខែ": 90,
-                    "បន្ត 1 ឆ្នាំ": 365,
-                }
-                extend_choice = c2.selectbox(
-                    "បន្តសុពលភាព",
-                    list(extension_options.keys()),
-                    key=f"extend_choice_{account['id']}",
-                )
-                if st.button(
-                    "📅 បន្ត",
-                    key=f"extend_{account['id']}",
-                ):
-                    try:
-                        new_expiry = extend_account(
-                            account["id"],
-                            account["expires_at"],
-                            extension_options[extend_choice],
-                        )
-                        st.success(
-                            f"បានបន្តដល់ {format_expiry(new_expiry.isoformat())}"
-                        )
-                        st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
+                c2.caption("គ្មាន Plan និងគ្មានថ្ងៃផុតកំណត់")
     except Exception as e:
         st.error("❌ មិនអាចអានបញ្ជី Account បានទេ។")
         st.exception(e)
 
 
 # =========================================================
-# Login Gate
+# LOGIN GATE
 # =========================================================
 
 if "logged_in" not in st.session_state:
@@ -376,9 +270,7 @@ if "is_admin" not in st.session_state:
 
 if not st.session_state.logged_in:
     if not ADMIN_USERNAME or not ADMIN_PASSWORD:
-        st.warning(
-            "⚠️ សូមដាក់ ADMIN_USERNAME និង ADMIN_PASSWORD ក្នុង Streamlit Secrets ជាមុនសិន។"
-        )
+        st.warning("⚠️ សូមដាក់ ADMIN_USERNAME និង ADMIN_PASSWORD ក្នុង Streamlit Secrets។")
     show_login()
     st.stop()
 
@@ -387,15 +279,13 @@ if st.session_state.is_admin:
     st.stop()
 
 current_account = st.session_state.get("account") or {}
-if not is_account_valid(current_account):
+if not current_account.get("active", False):
     st.session_state.clear()
-    st.error("⛔ Account របស់អ្នកផុតកំណត់ ឬត្រូវបានបិទ។")
+    st.error("⛔ Account នេះត្រូវបានបិទ។")
     st.stop()
 
 st.sidebar.success(f"👤 {current_account.get('username', '')}")
-st.sidebar.info(
-    f"📅 ផុតកំណត់: {format_expiry(current_account['expires_at'])}"
-)
+st.sidebar.link_button("📱 ទាក់ទងម្ចាស់តាម Telegram", TELEGRAM_URL, use_container_width=True)
 if st.sidebar.button("🚪 ចាកចេញ"):
     st.session_state.clear()
     st.rerun()
@@ -841,6 +731,7 @@ def create_dubbing_audio(
 
     inputs = []
     filters = []
+
     for index, (
         clip_path,
         start,
