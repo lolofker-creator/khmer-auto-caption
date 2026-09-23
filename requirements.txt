@@ -1,4 +1,5 @@
 streamlit
 google-genai
 imageio-ffmpeg
-gradio_client
+huggingface_hub
+pillow
