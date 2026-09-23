@@ -140,6 +140,21 @@ def ensure_khmer_font():
 # WORD / TRANSCRIPTION HELPERS
 # ============================================================
 
+def parse_duration(value):
+    """Convert Gemini Duration values such as '1.25s' to seconds."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if text.endswith("s"):
+        text = text[:-1]
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
 def add_word(result, word, start=None, end=None):
     text = get_value(word, "word", None)
     if text is None:
@@ -147,19 +162,25 @@ def add_word(result, word, start=None, end=None):
     if not text:
         return
 
+    # Current Gemini WordInfo uses start_offset / end_offset.
+    if start is None:
+        start = get_value(word, "start_offset", None)
     if start is None:
         start = get_value(word, "start_time", None)
-    if end is None:
-        end = get_value(word, "end_time", None)
     if start is None:
         start = get_value(word, "start", 0)
+
+    if end is None:
+        end = get_value(word, "end_offset", None)
+    if end is None:
+        end = get_value(word, "end_time", None)
     if end is None:
         end = get_value(word, "end", start)
 
     result.append({
         "text": str(text),
-        "start": sec(start),
-        "end": sec(end),
+        "start": parse_duration(start),
+        "end": parse_duration(end),
     })
 
 
@@ -253,12 +274,16 @@ def transcribe(client, audio_path, source_language):
     elif source_language == "Khmer":
         language_codes = ["km-KH"]
 
-    config_kwargs = {
-        "response_modalities": ["TEXT"],
+    # Transcription options must be nested in AudioTranscriptionConfig.
+    transcription_kwargs = {
         "word_timestamp": True,
     }
     if language_codes:
-        config_kwargs["language_codes"] = language_codes
+        transcription_kwargs["language_codes"] = language_codes
+
+    transcription_config = types.AudioTranscriptionConfig(
+        **transcription_kwargs
+    )
 
     def call():
         return client.models.generate_content(
@@ -270,7 +295,9 @@ def transcribe(client, audio_path, source_language):
                 ),
                 prompt,
             ],
-            config=types.GenerateContentConfig(**config_kwargs),
+            config=types.GenerateContentConfig(
+                audio_transcription_config=transcription_config,
+            ),
         )
 
     return retry_gemini(call)
@@ -681,6 +708,7 @@ with st.expander("🎙️ Text → Gemini Voice"):
                 )
                 output.close()
 
+                
                 with st.spinner("កំពុងបង្កើតសំឡេង..."):
                     gemini_tts(client, tts_text.strip(), output.name)
 
