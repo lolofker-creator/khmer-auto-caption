@@ -63,6 +63,18 @@ def ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def get_api_key():
+    """Read Gemini API key from Streamlit Secrets or environment only.
+    The key is no longer shown or entered in the app UI.
+    """
+    try:
+        key = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        key = ""
+
+    return str(key or os.getenv("GEMINI_API_KEY", "")).strip()
+
+
 
 def ass_time(value):
     value = max(0.0, float(value))
@@ -628,27 +640,62 @@ def page_media_download(page_url, output_path):
 
 
 def webpage_download(page_url, output_path):
+    """Download a public video URL/page with yt-dlp first.
+
+    FFmpeg is explicitly supplied so yt-dlp can merge video/audio on
+    Streamlit Cloud. Falls back to a direct public MP4/M3U8 URL.
+    """
+    import yt_dlp
+
+    errors = []
+
+    formats = [
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "best",
+    ]
+
+    for fmt in formats:
+        try:
+            options = {
+                "outtmpl": output_path,
+                "format": fmt,
+                "merge_output_format": "mp4",
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "ffmpeg_location": ffmpeg(),
+                "retries": 3,
+                "fragment_retries": 3,
+                "socket_timeout": 30,
+            }
+
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.download([page_url])
+
+            # yt-dlp may write the requested path directly or with a final
+            # extension. Accept either result.
+            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+
+            base, _ = os.path.splitext(output_path)
+            for candidate in (base + ".mp4", base + ".webm", base + ".mkv"):
+                if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                    if candidate != output_path:
+                        os.replace(candidate, output_path)
+                    return output_path
+
+        except Exception as exc:
+            errors.append(str(exc))
+
     try:
-        import yt_dlp
+        return page_media_download(page_url, output_path)
+    except Exception as exc:
+        errors.append(str(exc))
 
-        options = {
-            "outtmpl": output_path,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
-
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([page_url])
-
-        if os.path.isfile(output_path):
-            return output_path
-    except Exception:
-        pass
-
-    return page_media_download(page_url, output_path)
+    raise RuntimeError(
+        "មិនអាច Download វីដេអូនេះបានទេ។ សូមពិនិត្យ Link ឬវីដេអូថាជា Public។\n\n"
+        + "\n".join(errors[-3:])
+    )
 
 # ============================================================
 # UI — DOWNLOAD VIDEO
@@ -689,11 +736,7 @@ with st.expander("⬇️ Download Video"):
 # ============================================================
 
 with st.expander("🎙️ Text → Gemini Voice"):
-    api_key_tts = st.text_input(
-        "Gemini API Key",
-        type="password",
-        key="tts_api_key",
-    )
+    api_key_tts = get_api_key()
 
     tts_text = st.text_area(
         "បញ្ចូលអត្ថបទ",
@@ -703,7 +746,7 @@ with st.expander("🎙️ Text → Gemini Voice"):
 
     if st.button("🎙️ Generate Voice"):
         if not api_key_tts:
-            st.warning("សូមដាក់ Gemini API Key")
+            st.error("មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។")
         elif not tts_text.strip():
             st.warning("សូមបញ្ចូលអត្ថបទ")
         else:
@@ -739,11 +782,7 @@ with st.expander("🎙️ Text → Gemini Voice"):
 st.divider()
 st.subheader("🎬 Auto Caption")
 
-api_key = st.text_input(
-    "Gemini API Key",
-    type="password",
-    key="caption_api_key",
-)
+api_key = get_api_key()
 
 source_language = st.selectbox(
     "ភាសាសំឡេងដើម",
@@ -765,7 +804,7 @@ if uploaded_video:
 
 if st.button("🚀 Auto Caption", type="primary"):
     if not api_key:
-        st.warning("សូមដាក់ Gemini API Key")
+        st.error("មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។")
         st.stop()
 
     if not uploaded_video:
