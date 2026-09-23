@@ -45,14 +45,48 @@ def sec(v):
 
 
 def words_from(response):
+    """Read Gemini word-level timestamps from the actual AudioTranscription
+    response. Gemini returns words under candidate -> content -> part ->
+    audio_transcription -> words, not under annotations/steps.
+    """
     words = []
-    for step in getattr(response, "steps", []) or []:
-        for content in getattr(step, "content", []) or []:
-            for a in getattr(content, "annotations", []) or []:
-                if getattr(a, "type", None) == "word_info":
-                    words.append(a)
-    return words
 
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) if content else None
+            for part in parts or []:
+                transcription = getattr(part, "audio_transcription", None)
+                if transcription is None:
+                    transcription = getattr(part, "audioTranscription", None)
+                if transcription is None:
+                    continue
+
+                items = getattr(transcription, "words", None) or []
+                for item in items:
+                    word = getattr(item, "word", None)
+                    if word is None:
+                        word = getattr(item, "text", None)
+
+                    start = getattr(item, "start_offset", None)
+                    if start is None:
+                        start = getattr(item, "startOffset", None)
+
+                    end = getattr(item, "end_offset", None)
+                    if end is None:
+                        end = getattr(item, "endOffset", None)
+
+                    if word and start is not None and end is not None:
+                        words.append({
+                            "text": str(word).strip(),
+                            "start": sec(start),
+                            "end": sec(end),
+                        })
+    except Exception:
+        pass
+
+    return words
 
 def make_groups(words, max_words=10, max_seconds=4):
     groups = []
@@ -60,12 +94,12 @@ def make_groups(words, max_words=10, max_seconds=4):
     start = end = None
 
     for w in words:
-        text = str(getattr(w, "text", "") or "").strip()
+        text = str(w.get("text", "") or "").strip()
         if not text:
             continue
 
-        s = sec(getattr(w, "start_offset", ""))
-        e = sec(getattr(w, "end_offset", ""))
+        s = float(w.get("start", 0.0))
+        e = float(w.get("end", s))
 
         if start is None:
             start = s
@@ -90,7 +124,6 @@ def make_groups(words, max_words=10, max_seconds=4):
         })
 
     return groups
-
 
 def translate_to_khmer(groups, client, source):
     if source == "🇰🇭 ខ្មែរ" or not groups:
@@ -668,8 +701,12 @@ if video:
                 words = words_from(response)
 
                 if not words:
+                    transcript = getattr(response, "text", "") or ""
+                    detail = transcript.strip()[:1000]
                     raise RuntimeError(
-                        "Gemini មិនបានផ្តល់ Word Timing មកទេ។"
+                        "Gemini បានទទួលសំឡេង ប៉ុន្តែ Response មិនមាន Word Timing។ "
+                        "កូដថ្មីបានអានទីតាំង AudioTranscription ត្រឹមត្រូវហើយ។"
+                        + (f"\n\nTranscript: {detail}" if detail else "")
                     )
 
                 groups = make_groups(words)
