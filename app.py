@@ -1,4 +1,4 @@
-import os, json, subprocess, tempfile, wave, base64, time
+import os, json, subprocess, tempfile, wave, base64, time, urllib.request, urllib.error
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -149,28 +149,67 @@ def gemini_tts(text, out):
             "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
         ) from e
 
-def gemini_image(prompt, aspect_ratio="1:1", image_size="1K"):
-    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+def openai_image(prompt, aspect_ratio="1:1", quality="low"):
+    """Generate one image with OpenAI GPT Image API without adding another package."""
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+    except Exception as e:
+        raise RuntimeError(
+            "❌ មិនឃើញ OPENAI_API_KEY ក្នុង Streamlit Secrets ទេ។ "
+            "សូមបន្ថែម OPENAI_API_KEY មុនប្រើ GPT Image។"
+        ) from e
 
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-image",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
-            image_config=types.ImageConfig(
-                aspect_ratio=aspect_ratio,
-                image_size=image_size,
-            ),
-        ),
+    # Use the officially supported landscape/portrait/square sizes.
+    size_map = {
+        "1:1": "1024x1024",
+        "9:16": "1024x1536",
+        "3:4": "1024x1536",
+        "16:9": "1536x1024",
+        "4:3": "1536x1024",
+    }
+    size = size_map.get(aspect_ratio, "1024x1024")
+
+    payload = {
+        "model": "gpt-image-2.5-sunburst",
+        "prompt": prompt,
+        "size": size,
+        "quality": quality,
+        "output_format": "png",
+    }
+
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/images/generations",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
     )
 
-    for part in getattr(response, "parts", []) or []:
-        if getattr(part, "inline_data", None) is not None:
-            return part.as_image()
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body).get("error", {}).get("message", body)
+        except Exception:
+            detail = body
+        if e.code == 429:
+            raise RuntimeError(
+                "❌ OpenAI GPT Image quota/rate limit អស់។ "
+                "សូមពិនិត្យ API billing/credits របស់ OpenAI។\n\n" + str(detail)
+            ) from e
+        raise RuntimeError(f"❌ OpenAI Image API Error ({e.code}): {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"❌ មិនអាចភ្ជាប់ OpenAI Image API បានទេ: {e.reason}") from e
 
-    raise RuntimeError(
-        "❌ Gemini មិនបានផ្ញើរូបភាពមកទេ។ សូមពិនិត្យ GEMINI_API_KEY និងសិទ្ធិប្រើ Image Generation។"
-    )
+    try:
+        image_b64 = result["data"][0]["b64_json"]
+        return base64.b64decode(image_b64)
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        raise RuntimeError("❌ OpenAI មិនបានផ្ញើរូបភាពមកទេ។") from e
 
 def duration(path):
     with wave.open(path, "rb") as w:
@@ -319,7 +358,7 @@ dub = st.checkbox(
     value=False,
 )
 
-st.subheader("🖼️ បង្កើតរូបភាព AI — Gemini")
+st.subheader("🖼️ បង្កើតរូបភាព AI — GPT")
 
 image_prompt = st.text_area(
     "✍️ សរសេរអ្វីដែលចង់បង្កើតជារូបភាព",
@@ -337,11 +376,11 @@ with img_c1:
         key="image_ratio",
     )
 with img_c2:
-    image_size = st.selectbox(
+    image_quality = st.selectbox(
         "✨ គុណភាព",
-        ["1K", "2K", "4K"],
+        ["Low", "Medium", "High"],
         index=0,
-        key="image_size",
+        key="image_quality",
     )
 
 if st.button("🎨 បង្កើតរូបភាព AI", use_container_width=True):
@@ -349,17 +388,12 @@ if st.button("🎨 បង្កើតរូបភាព AI", use_container_width
         st.warning("សូមសរសេរ Prompt ជាមុន។")
     else:
         try:
-            with st.spinner("🎨 Gemini កំពុងបង្កើតរូបភាព..."):
-                generated = gemini_image(
+            with st.spinner("🎨 GPT កំពុងបង្កើតរូបភាព..."):
+                image_data = openai_image(
                     image_prompt.strip(),
                     aspect_ratio=image_ratio,
-                    image_size=image_size,
+                    quality=image_quality.lower(),
                 )
-
-            from io import BytesIO
-            buf = BytesIO()
-            generated.save(buf, format="PNG")
-            image_data = buf.getvalue()
 
             st.image(image_data, use_container_width=True)
             st.download_button(
@@ -371,7 +405,7 @@ if st.button("🎨 បង្កើតរូបភាព AI", use_container_width
             )
         except Exception as e:
             st.error("❌ បង្កើតរូបភាពមិនបាន")
-            st.exception(e)
+            st.warning(str(e))
 
 st.subheader("🗣️ អក្សរ → សំឡេង Gemini")
 
