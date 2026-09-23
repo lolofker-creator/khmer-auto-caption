@@ -8,81 +8,67 @@ import imageio_ffmpeg
 from faster_whisper import WhisperModel
 
 
-# =========================================================
-# PAGE
-# =========================================================
-
 st.set_page_config(
     page_title="Smey Auto Caption",
-    page_icon="🇰🇭",
-    layout="centered",
+    page_icon="🇰🇭"
 )
 
 st.title("🇰🇭 Smey Auto Caption")
-st.write("🎙️ សំឡេងខ្មែរ → Caption ខ្មែរ → MP4")
-st.info("🆓 Free — មិនប្រើ Gemini API")
+st.write("🎙️ សំឡេងខ្មែរ → Caption តាមពេលនិយាយ")
+st.info("🆓 Free — មិនប្រើ Gemini")
 
 
 # =========================================================
 # FFMPEG
 # =========================================================
 
-def run_ffmpeg(args):
+def ffmpeg(args):
     exe = imageio_ffmpeg.get_ffmpeg_exe()
 
     subprocess.run(
         [exe] + args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        check=True,
+        check=True
     )
 
 
-def extract_audio(video_path, audio_path):
-    run_ffmpeg([
+def extract_audio(video, audio):
+    ffmpeg([
         "-y",
-        "-i",
-        video_path,
+        "-i", video,
         "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        audio_path,
+        "-ac", "1",
+        "-ar", "16000",
+        "-c:a", "pcm_s16le",
+        audio
     ])
 
 
 # =========================================================
-# KHMER WHISPER
+# WHISPER
 # =========================================================
 
 @st.cache_resource
-def load_model():
-
+def get_model():
     return WhisperModel(
         "PhanithLIM/whisper-tiny-khmer-ct2",
         device="cpu",
         compute_type="int8",
         cpu_threads=1,
-        num_workers=1,
+        num_workers=1
     )
 
 
 # =========================================================
-# CLEAN TEXT
+# CLEAN
 # =========================================================
 
-def clean_text(text):
-
+def clean(text):
     text = str(text)
-
     text = text.replace("\n", " ")
     text = text.replace("\r", " ")
-
     text = re.sub(r"\s+", " ", text)
-
     return text.strip()
 
 
@@ -90,34 +76,29 @@ def clean_text(text):
 # ASS TIME
 # =========================================================
 
-def ass_time(seconds):
+def ass_time(t):
+    t = max(0.0, float(t))
 
-    seconds = max(0.0, float(seconds))
-
-    h = int(seconds // 3600)
-
-    m = int(
-        (seconds % 3600) // 60
-    )
-
-    s = int(
-        seconds % 60
-    )
-
-    cs = int(
-        (seconds - int(seconds)) * 100
-    )
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = int(t % 60)
+    cs = int((t - int(t)) * 100)
 
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 # =========================================================
-# MAKE SHORT CAPTIONS
+# IMPORTANT
+#
+# ពាក្យនីមួយៗ = Caption នីមួយៗ
+#
+# មិនកាត់ 0.9 វិនាទី
+# មិនយក segment ទាំងមូល
 # =========================================================
 
-def make_captions(segments):
+def make_word_captions(segments):
 
-    captions = []
+    result = []
 
     for segment in segments:
 
@@ -130,14 +111,9 @@ def make_captions(segments):
         if not words:
             continue
 
-        current_words = []
-
-        start_time = None
-        end_time = None
-
         for word in words:
 
-            word_text = clean_text(
+            text = clean(
                 getattr(
                     word,
                     "word",
@@ -145,145 +121,50 @@ def make_captions(segments):
                 )
             )
 
-            if not word_text:
-                continue
-
-            word_start = getattr(
+            start = getattr(
                 word,
                 "start",
                 None
             )
 
-            word_end = getattr(
+            end = getattr(
                 word,
                 "end",
                 None
             )
 
-            if word_start is None:
+            if not text:
                 continue
 
-            if word_end is None:
+            if start is None or end is None:
                 continue
 
-            word_start = float(word_start)
-            word_end = float(word_end)
+            start = float(start)
+            end = float(end)
 
-            if start_time is None:
-                start_time = word_start
+            if end <= start:
+                end = start + 0.15
 
-            current_words.append(
-                word_text
-            )
+            result.append({
+                "start": start,
+                "end": end,
+                "text": text
+            })
 
-            end_time = word_end
-
-            text = clean_text(
-                " ".join(current_words)
-            )
-
-            duration = (
-                end_time - start_time
-            )
-
-            # Caption ខ្លីៗ
-            should_cut = False
-
-            # ប្រហែល 0.9 វិនាទី
-            if duration >= 0.9:
-                should_cut = True
-
-            # កុំឲ្យអក្សរច្រើនពេក
-            if len(text) >= 24:
-                should_cut = True
-
-            # បើចប់ប្រយោគ
-            if text.endswith(
-                (
-                    "។",
-                    "?",
-                    "!",
-                    "…",
-                    "។។",
-                )
-            ):
-                should_cut = True
-
-            if should_cut:
-
-                captions.append({
-                    "start": start_time,
-                    "end": end_time,
-                    "text": text,
-                })
-
-                current_words = []
-                start_time = None
-                end_time = None
-
-        # ពាក្យដែលនៅសល់
-        if (
-            current_words
-            and start_time is not None
-            and end_time is not None
-        ):
-
-            text = clean_text(
-                " ".join(current_words)
-            )
-
-            if text:
-
-                captions.append({
-                    "start": start_time,
-                    "end": end_time,
-                    "text": text,
-                })
-
-    # =====================================================
-    # FIX OVERLAP
-    # =====================================================
-
-    captions.sort(
+    result.sort(
         key=lambda x: x["start"]
     )
 
-    fixed = []
-
-    for item in captions:
-
-        start = float(
-            item["start"]
-        )
-
-        end = float(
-            item["end"]
-        )
-
-        if fixed:
-
-            previous_end = fixed[-1]["end"]
-
-            if start < previous_end:
-                start = previous_end
-
-        if end <= start:
-            end = start + 0.25
-
-        fixed.append({
-            "start": start,
-            "end": end,
-            "text": item["text"],
-        })
-
-    return fixed
+    return result
 
 
 # =========================================================
-# ASS FILE
+# CREATE ASS
+#
+# ពាក្យមួយចេញតាមពេលរបស់វា
 # =========================================================
 
-def create_ass(captions, ass_path):
+def create_ass(words, path):
 
     header = """[Script Info]
 ScriptType: v4.00+
@@ -293,23 +174,23 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Khmer,Noto Sans Khmer,68,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,3,1,2,45,45,140,1
+Style: Khmer,Noto Sans Khmer,68,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,3,1,2,45,45,150,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     with open(
-        ass_path,
+        path,
         "w",
         encoding="utf-8"
     ) as f:
 
         f.write(header)
 
-        for item in captions:
+        for item in words:
 
-            text = clean_text(
+            text = clean(
                 item["text"]
             )
 
@@ -323,11 +204,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 r"\}"
             )
 
+            start = ass_time(
+                item["start"]
+            )
+
+            end = ass_time(
+                item["end"]
+            )
+
             line = (
                 "Dialogue: 0,"
-                + ass_time(item["start"])
+                + start
                 + ","
-                + ass_time(item["end"])
+                + end
                 + ",Khmer,,0,0,0,,"
                 + text
                 + "\n"
@@ -337,29 +226,27 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # =========================================================
-# BURN CAPTION INTO VIDEO
+# BURN CAPTION
 # =========================================================
 
 def burn_caption(
-    video_path,
-    ass_path,
-    output_path
+    video,
+    ass,
+    output
 ):
 
-    # FFmpeg filter path
-    filter_path = (
-        ass_path
+    ass_filter = (
+        ass
         .replace("\\", "/")
         .replace(":", r"\:")
         .replace("'", r"\'")
     )
 
-    run_ffmpeg([
+    ffmpeg([
         "-y",
-        "-i",
-        video_path,
+        "-i", video,
         "-vf",
-        f"ass='{filter_path}'",
+        f"ass='{ass_filter}'",
         "-c:v",
         "libx264",
         "-preset",
@@ -372,7 +259,7 @@ def burn_caption(
         "128k",
         "-movflags",
         "+faststart",
-        output_path,
+        output
     ])
 
 
@@ -380,14 +267,14 @@ def burn_caption(
 # UPLOAD
 # =========================================================
 
-uploaded_video = st.file_uploader(
+video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
     type=[
         "mp4",
         "mov",
         "mkv",
-        "webm",
-    ],
+        "webm"
+    ]
 )
 
 
@@ -395,78 +282,65 @@ uploaded_video = st.file_uploader(
 # PROCESS
 # =========================================================
 
-if uploaded_video:
+if video:
 
-    st.video(uploaded_video)
+    st.video(video)
 
     if st.button(
-        "⚡ បង្កើត Caption ខ្មែរ",
-        use_container_width=True,
+        "⚡ បង្កើត Caption",
+        use_container_width=True
     ):
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as folder:
 
             video_path = os.path.join(
-                temp_dir,
+                folder,
                 "input.mp4"
             )
 
             audio_path = os.path.join(
-                temp_dir,
+                folder,
                 "audio.wav"
             )
 
             ass_path = os.path.join(
-                temp_dir,
+                folder,
                 "caption.ass"
             )
 
             output_path = os.path.join(
-                temp_dir,
+                folder,
                 "smey_auto_caption.mp4"
             )
 
-            # Save uploaded video
             with open(
                 video_path,
                 "wb"
             ) as f:
-
                 f.write(
-                    uploaded_video.getbuffer()
+                    video.getbuffer()
                 )
 
             try:
 
-                # -------------------------------------------------
-                # 1. Extract audio
-                # -------------------------------------------------
-
+                # 1
                 with st.spinner(
-                    "🎵 កំពុងដកសំឡេងពីវីដេអូ..."
+                    "🎵 កំពុងដកសំឡេង..."
                 ):
-
                     extract_audio(
                         video_path,
                         audio_path
                     )
 
-                # -------------------------------------------------
-                # 2. Load model
-                # -------------------------------------------------
-
+                # 2
                 with st.spinner(
                     "🧠 កំពុងបើក Khmer Whisper..."
                 ):
+                    model = get_model()
 
-                    model = load_model()
-
-                # -------------------------------------------------
-                # 3. Transcribe
-                # -------------------------------------------------
-
+                # 3
                 with st.spinner(
-                    "🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."
+                    "🎙️ កំពុងស្តាប់សំឡេង..."
                 ):
 
                     segments, info = model.transcribe(
@@ -477,48 +351,46 @@ if uploaded_video:
                         temperature=0,
                         vad_filter=True,
                         word_timestamps=True,
-                        condition_on_previous_text=False,
+                        condition_on_previous_text=False
                     )
 
                     segments = list(
                         segments
                     )
 
-                # -------------------------------------------------
-                # 4. Make timed captions
-                # -------------------------------------------------
+                # 4
+                # ពាក្យនីមួយៗមាន timing ផ្ទាល់ខ្លួន
+                with st.spinner(
+                    "⏱️ កំពុងកំណត់ពេលពាក្យនីមួយៗ..."
+                ):
 
-                captions = make_captions(
-                    segments
-                )
+                    word_captions = (
+                        make_word_captions(
+                            segments
+                        )
+                    )
 
-                if not captions:
+                if not word_captions:
 
                     st.error(
-                        "❌ រកមិនឃើញសំឡេងខ្មែរ។"
+                        "❌ រកមិនឃើញ Caption"
                     )
 
                     st.stop()
 
-                # -------------------------------------------------
-                # 5. Create ASS
-                # -------------------------------------------------
-
+                # 5
                 with st.spinner(
-                    "📝 កំពុងរៀបចំ Caption តាមពេលនិយាយ..."
+                    "📝 កំពុងបង្កើត Caption តាមសំឡេង..."
                 ):
 
                     create_ass(
-                        captions,
+                        word_captions,
                         ass_path
                     )
 
-                # -------------------------------------------------
-                # 6. Burn caption
-                # -------------------------------------------------
-
+                # 6
                 with st.spinner(
-                    "🎬 កំពុងបញ្ចូល Caption ទៅក្នុង MP4..."
+                    "🎬 កំពុងបញ្ចូល Caption ទៅវីដេអូ..."
                 ):
 
                     burn_caption(
@@ -527,35 +399,25 @@ if uploaded_video:
                         output_path
                     )
 
-                # -------------------------------------------------
-                # 7. Read result
-                # -------------------------------------------------
-
+                # 7
                 with open(
                     output_path,
                     "rb"
                 ) as f:
-
-                    output_data = f.read()
-
-                # -------------------------------------------------
-                # 8. Show result
-                # -------------------------------------------------
+                    data = f.read()
 
                 st.success(
-                    "✅ រួចរាល់!"
+                    "✅ រួចរាល់"
                 )
 
-                st.video(
-                    output_data
-                )
+                st.video(data)
 
                 st.download_button(
                     "⬇️ ទាញយក MP4",
-                    data=output_data,
+                    data=data,
                     file_name="smey_auto_caption.mp4",
                     mime="video/mp4",
-                    use_container_width=True,
+                    use_container_width=True
                 )
 
             except Exception as e:
@@ -566,4 +428,4 @@ if uploaded_video:
 
                 st.code(
                     str(e)
-)
+                )
