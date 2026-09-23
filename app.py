@@ -157,12 +157,10 @@ def gemini_image(prompt, aspect_ratio="1:1", image_size="1K"):
         contents=prompt,
         config=types.GenerateContentConfig(
             response_modalities=["IMAGE"],
-            response_format={
-                "image": {
-                    "aspect_ratio": aspect_ratio,
-                    "image_size": image_size,
-                }
-            },
+            image_config=types.ImageConfig(
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+            ),
         ),
     )
 
