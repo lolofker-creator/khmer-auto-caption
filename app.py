@@ -8,6 +8,8 @@ import time
 import wave
 import json
 
+from gtts import gTTS
+
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -33,8 +35,6 @@ st.markdown(
 
 TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
 TRANSLATE_MODEL = "gemini-3.1-flash-lite"
-TTS_MODEL = "gemini-3.1-flash-tts-preview"
-TTS_VOICE = "Kore"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(BASE_DIR, "fonts")
@@ -540,62 +540,16 @@ def extract_audio(video_path, output_wav):
 # GEMINI TTS — EXISTING FEATURE
 # ============================================================
 
-def gemini_tts(client, text, output_wav):
-    response = retry_gemini(
-        lambda: client.models.generate_content(
-            model=TTS_MODEL,
-            contents=text,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=TTS_VOICE
-                        )
-                    )
-                ),
-            ),
-        ),
-        attempts=2,
-        delay=4,
-    )
+def free_tts(text, output_mp3, language="km"):
+    """Free TTS using gTTS. Does not use Gemini TTS quota."""
+    text = text.strip()
+    if not text:
+        raise ValueError("សូមបញ្ចូលអត្ថបទ")
 
-    audio = get_value(response, "audio", None)
+    tts = gTTS(text=text, lang=language, slow=False)
+    tts.save(output_mp3)
+    return output_mp3
 
-    if audio is None:
-        candidates = get_value(response, "candidates", [])
-        for candidate in candidates or []:
-            content = get_value(candidate, "content", None)
-            for part in get_value(content, "parts", []) or []:
-                inline = get_value(part, "inline_data", None)
-                if inline:
-                    audio = inline
-                    break
-            if audio:
-                break
-
-    if audio is None:
-        raise RuntimeError("Gemini មិនបានបញ្ជូនសំឡេងត្រឡប់មកវិញ")
-
-    data = get_value(audio, "data", None)
-    if isinstance(data, str):
-        data = base64.b64decode(data)
-    if not data:
-        raise RuntimeError("ទិន្នន័យ TTS ទទេ")
-
-    mime = get_value(audio, "mime_type", "") or ""
-
-    if "wav" not in mime.lower():
-        with wave.open(output_wav, "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(24000)
-            wav.writeframes(data)
-    else:
-        with open(output_wav, "wb") as f:
-            f.write(data)
-
-    return output_wav
 
 # ============================================================
 # DOWNLOAD VIDEO — EXISTING FEATURE
@@ -731,49 +685,6 @@ with st.expander("⬇️ Download Video"):
             except Exception as e:
                 st.error(str(e))
 
-# ============================================================
-# UI — TEXT → GEMINI VOICE
-# ============================================================
-
-with st.expander("🎙️ Text → Gemini Voice"):
-    api_key_tts = get_api_key()
-
-    tts_text = st.text_area(
-        "បញ្ចូលអត្ថបទ",
-        height=120,
-        key="tts_text",
-    )
-
-    if st.button("🎙️ Generate Voice"):
-        if not api_key_tts:
-            st.error("មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។")
-        elif not tts_text.strip():
-            st.warning("សូមបញ្ចូលអត្ថបទ")
-        else:
-            try:
-                client = get_gemini_client(api_key_tts)
-                output = tempfile.NamedTemporaryFile(
-                    delete=False,
-                    suffix=".wav",
-                )
-                output.close()
-
-                with st.spinner("កំពុងបង្កើតសំឡេង..."):
-                    gemini_tts(client, tts_text.strip(), output.name)
-
-                with open(output.name, "rb") as f:
-                    audio_bytes = f.read()
-                st.audio(audio_bytes, format="audio/wav")
-
-                with open(output.name, "rb") as f:
-                    st.download_button(
-                        "📥 Download Voice",
-                        f,
-                        file_name="gemini_voice.wav",
-                        mime="audio/wav",
-                    )
-            except Exception as e:
-                st.error(str(e))
 
 # ============================================================
 # UI — AUTO CAPTION
