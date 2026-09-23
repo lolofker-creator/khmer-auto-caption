@@ -3,6 +3,7 @@ import re
 import subprocess
 import tempfile
 import urllib.request
+import urllib.parse
 import time
 import wave
 import json
@@ -279,110 +280,166 @@ def free_tts(text, output_mp3, language='km'):
     tts = gTTS(text=text, lang=language, slow=False)
     tts.save(output_mp3)
     return output_mp3
-MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\s\"'<>]*)?", re.I)
+MEDIA_RE = re.compile(
+    r"(?:https?:)?\\?/\\?/[^\"'<>\s]+?\\?(?:u0026|amp;)?[^\"'<>\s]*|"
+    r"https?://[^\"'<>\s]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\"'<>\s]*)?",
+    re.I,
+)
 
-def find_media_urls(html):
-    html = html.replace('\\/', '/')
-    urls = MEDIA_RE.findall(html)
-    urls += re.findall(r"https?://[^\s\"\'<>]+?\.m3u8(?:\?[^\s\"\'<>]*)?", html, re.I)
-    return list(dict.fromkeys(urls))
+
+def normalize_media_url(url):
+    url = url.replace('\\/', '/')
+    url = url.replace('\\u0026', '&').replace('\\u003F', '?').replace('\\u003D', '=')
+    url = url.replace('&amp;', '&')
+    url = url.strip('\\\"\' ,);]')
+    if url.startswith('//'):
+        url = 'https:' + url
+    return url
+
+
+def find_media_urls(text):
+    text = text.replace('\\/', '/').replace('\\u0026', '&').replace('\\u003A', ':')
+    patterns = [
+        r'https?://[^\"\'<>\s]+?\.m3u8(?:\?[^\"\'<>\s]*)?',
+        r'https?://[^\"\'<>\s]+?\.mp4(?:\?[^\"\'<>\s]*)?',
+        r'//[^\"\'<>\s]+?\.m3u8(?:\?[^\"\'<>\s]*)?',
+        r'//[^\"\'<>\s]+?\.mp4(?:\?[^\"\'<>\s]*)?',
+    ]
+    found = []
+    for pattern in patterns:
+        for raw in re.findall(pattern, text, flags=re.I):
+            url = normalize_media_url(raw)
+            if url not in found:
+                found.append(url)
+    return found
+
 
 def video_ok(path):
     if not os.path.isfile(path) or os.path.getsize(path) < 10000:
         return False
-    cmd = [ffmpeg(), '-v', 'error', '-i', path, '-map', '0:v:0', '-frames:v', '1', '-f', 'null', '-']
-    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    result = subprocess.run(
+        [ffmpeg(), '-v', 'error', '-i', path, '-map', '0:v:0', '-frames:v', '1', '-f', 'null', '-'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
 
-def download_media_url(url, output_path, referer=None):
+
+def download_direct_video(url, output_path, referer=None):
+    headers = 'User-Agent: Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36\r\n'
+    if referer:
+        headers += f'Referer: {referer}\r\n'
+    result = subprocess.run(
+        [ffmpeg(), '-y', '-hide_banner', '-loglevel', 'error', '-headers', headers, '-i', url,
+         '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', '-movflags', '+faststart', output_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0 or not video_ok(output_path):
+        error = result.stderr.decode('utf-8', errors='ignore')
+        raise RuntimeError(error[-2200:] or 'Video មិនអាច Download បាន')
+    return os.path.getsize(output_path)
+
+
+def fetch_html(url, referer=None):
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/json,*/*;q=0.8',
     }
     if referer:
         headers['Referer'] = referer
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as r, open(output_path, 'wb') as f:
-        while chunk := r.read(1024 * 1024):
-            f.write(chunk)
-    if not video_ok(output_path):
-        raise RuntimeError('Link នេះមិនបានផ្ញើវីដេអូពិតទេ')
-    return output_path
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode('utf-8', errors='ignore'), r.geturl()
 
-def download_hls(url, output_path, referer=None):
-    headers = 'User-Agent: Mozilla/5.0\r\n'
-    if referer:
-        headers += f'Referer: {referer}\r\n'
-    command = [
-        ffmpeg(), '-y', '-headers', headers, '-i', url,
-        '-c', 'copy', '-movflags', '+faststart', output_path,
-    ]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0 or not video_ok(output_path):
-        error = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError(error[-3000:] or 'HLS Video មិនអាច Download បាន')
-    return output_path
 
 def page_media_download(page_url, output_path):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-        'Referer': page_url,
-    }
-    req = urllib.request.Request(page_url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        html = r.read().decode('utf-8', errors='ignore')
+    html, final_url = fetch_html(page_url)
+    sources = [(page_url, html)]
 
-    urls = find_media_urls(html)
-    for url in urls:
+    # Many modern sites put the actual player URL in JavaScript bundles.
+    scripts = re.findall(r'<script[^>]+src=[\"\']([^\"\']+)', html, flags=re.I)
+    base = final_url
+    for src in scripts[:12]:
         try:
-            if '.m3u8' in url.lower():
-                return download_hls(url, output_path, page_url)
-            return download_media_url(url, output_path, page_url)
+            full = urllib.parse.urljoin(base, src)
+            js, _ = fetch_html(full, final_url)
+            sources.append((final_url, js))
         except Exception:
             pass
 
-    raise RuntimeError('រកមិនឃើញ Video Stream (.mp4/.m3u8) ក្នុង Link នេះ')
+    urls = []
+    for _, text in sources:
+        for media in find_media_urls(text):
+            if media not in urls:
+                urls.append(media)
 
-def webpage_download(page_url, output_path, cookies=None):
-    if re.search(r'\.(?:mp4|webm|mov|mkv)(?:\?|$)', page_url, re.I):
+    if not urls:
+        raise RuntimeError('រកមិនឃើញ Video Stream (.mp4/.m3u8) ក្នុង HTML/JavaScript របស់ Link នេះទេ។')
+
+    last_error = None
+    for media in urls[:20]:
         try:
-            return download_media_url(page_url, output_path)
-        except Exception:
-            pass
+            return download_direct_video(media, output_path, page_url)
+        except Exception as e:
+            last_error = e
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except OSError:
+                pass
 
+    raise RuntimeError('រកឃើញ Stream ប៉ុន្តែ Server មិនអនុញ្ញាតឱ្យ Download តាម Stream នោះទេ។ ' + str(last_error or ''))
+
+
+def webpage_download(page_url, output_path):
+    page_url = page_url.strip()
+    if not page_url.startswith(('http://', 'https://')):
+        raise RuntimeError('❌ URL មិនត្រឹមត្រូវ។')
+
+    last_error = None
     try:
         import yt_dlp
         options = {
-            'outtmpl': output_path,
             'format': 'bv*+ba/b',
+            'outtmpl': output_path.replace('.mp4', '.%(ext)s'),
             'merge_output_format': 'mp4',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'ffmpeg_location': ffmpeg(),
             'retries': 5,
             'fragment_retries': 5,
             'socket_timeout': 30,
+            'ffmpeg_location': ffmpeg(),
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
                 'Referer': page_url,
             },
         }
-        if cookies:
-            options['cookiefile'] = cookies
         with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([page_url])
-        if video_ok(output_path):
-            return output_path
-        base = os.path.splitext(output_path)[0]
-        for ext in ('.mp4', '.webm', '.mkv'):
-            candidate = base + ext
-            if video_ok(candidate):
-                if candidate != output_path:
-                    os.replace(candidate, output_path)
-                return output_path
-    except Exception:
-        pass
+            info = ydl.extract_info(page_url, download=True)
+            prepared = ydl.prepare_filename(info) if info else ''
+            candidates = [output_path, prepared, os.path.splitext(prepared)[0] + '.mp4' if prepared else '']
+            folder = os.path.dirname(output_path)
+            candidates += [os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(('.mp4','.webm','.mkv','.mov'))]
+            existing = [x for x in candidates if x and os.path.exists(x) and os.path.getsize(x) > 10000]
+            if existing:
+                found = max(existing, key=os.path.getmtime)
+                if found != output_path:
+                    os.replace(found, output_path)
+                if video_ok(output_path):
+                    return os.path.getsize(output_path)
+    except Exception as e:
+        last_error = e
 
-    return page_media_download(page_url, output_path)
+    try:
+        return page_media_download(page_url, output_path)
+    except Exception as e:
+        detail = str(e)[-1800:]
+        if last_error:
+            detail = detail + '\\n\\nyt-dlp: ' + str(last_error)[-900:]
+        raise RuntimeError('❌ Download មិនបាន។ Website នេះប្រើ Video Stream ដែលមិនបង្ហាញដោយផ្ទាល់ដល់ Server ឬត្រូវការ Login/DRM។\\n\\n' + detail) from e
+
 
 with st.expander('🌐 បើកវីដេអូក្នុង Tool'):
     page_url = st.text_input('🔗 ដាក់ Link Website / Video', placeholder='https://...', key='web_video_url')
@@ -400,6 +457,26 @@ with st.expander('🌐 បើកវីដេអូក្នុង Tool'):
                     video_data = f.read()
                 st.video(video_data)
                 st.download_button('📥 Save MP4', video_data, file_name='smey_video.mp4', mime='video/mp4', key='save_tool_video')
+            except Exception as e:
+                st.error(f'❌ Download មិនបាន: {e}')
+
+with st.expander('🎙️ Text → Free Voice'):
+    tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
+    tts_language = st.selectbox('ភាសាសំឡេង', ['Khmer', 'Chinese', 'English'], key='tts_language')
+    tts_lang_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
+    if st.button('🎙️ Generate Voice', key='free_tts_button'):
+        if not tts_text.strip():
+            st.warning('សូមបញ្ចូលអត្ថបទជាមុន')
+        else:
+            try:
+                output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                output.close()
+                with st.spinner('កំពុងបង្កើតសំឡេង Free...'):
+                    free_tts(tts_text, output.name, tts_lang_map[tts_language])
+                with open(output.name, 'rb') as f:
+                    audio_data = f.read()
+                st.audio(audio_data, format='audio/mp3')
+                  st.download_button('📥 Save MP4', video_data, file_name='smey_video.mp4', mime='video/mp4', key='save_tool_video')
             except Exception as e:
                 st.error(f'❌ Download មិនបាន: {e}')
 
@@ -453,7 +530,7 @@ if st.button('🚀 Auto Caption', type='primary'):
             transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
             words = words_from(transcription)
             if not words:
-                  raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
+                raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
             groups = make_groups(words)
             full_text = ' '.join((item['text'] for item in groups))
             detected = detect_language(full_text)
