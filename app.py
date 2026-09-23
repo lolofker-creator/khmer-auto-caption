@@ -8,6 +8,7 @@ import urllib.request
 import hashlib
 import hmac
 import secrets
+import time
 
 from datetime import datetime, timezone
 
@@ -563,8 +564,9 @@ def generate_doslarb_tts_wav(
 ):
     """Generate Khmer speech with Doslarb Cloud TTS.
 
-    Uses the documented Bearer-token API and browser-like headers because
-    some edge/WAF configurations may reject the default Python urllib UA.
+    Free Doslarb is limited to 10 requests/minute. The dubbing process can
+    create many TTS requests in a short time, so this function deliberately
+    spaces requests out and retries HTTP 429 responses instead of failing.
     """
     api_key = str(st.secrets.get("DOSLARB_API_KEY", "")).strip()
 
@@ -583,7 +585,7 @@ def generate_doslarb_tts_wav(
     if not clean_text:
         raise ValueError("❌ អត្ថបទសម្រាប់ Doslarb TTS ទទេ។")
 
-    # Doslarb free tier allows up to 1200 Unicode characters per request.
+    # Doslarb Free allows up to 1200 Unicode characters per TTS request.
     if len(clean_text) > 1200:
         clean_text = clean_text[:1200]
 
@@ -592,56 +594,101 @@ def generate_doslarb_tts_wav(
         "voice": "sovann",
     }, ensure_ascii=False).encode("utf-8")
 
-    request = urllib.request.Request(
-        "https://doslarb.cloud/api/v1/tts",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
-        },
-        method="POST",
+    # Free tier: 10 requests/minute. Keep at least ~6.2 seconds between
+    # requests made by this Streamlit session so we stay safely below the cap.
+    min_interval = 6.2
+    last_request_at = float(
+        st.session_state.get("doslarb_last_request_at", 0.0)
     )
+    elapsed = time.monotonic() - last_request_at
+    if elapsed < min_interval:
+        time.sleep(min_interval - elapsed)
 
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            mp3_data = response.read()
-    except urllib.error.HTTPError as e:
+    max_429_retries = 5
+    mp3_data = None
+
+    for attempt in range(max_429_retries + 1):
+        request = urllib.request.Request(
+            "https://doslarb.cloud/api/v1/tts",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
+            },
+            method="POST",
+        )
+
+        st.session_state["doslarb_last_request_at"] = time.monotonic()
+
         try:
-            body = e.read().decode("utf-8", "replace").strip()
-        except Exception:
-            body = ""
+            with urllib.request.urlopen(request, timeout=90) as response:
+                mp3_data = response.read()
+            break
 
-        if e.code == 401:
-            raise RuntimeError(
-                "❌ Doslarb API Key មិនត្រឹមត្រូវ ឬត្រូវបានបដិសេធ (401). "
-                "សូមបង្កើត API Key ថ្មីដែលចាប់ផ្ដើមដោយ ds_sk_."
-            ) from e
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", "replace").strip()
+            except Exception:
+                body = ""
 
-        if e.code == 403:
+            if e.code == 429:
+                if attempt >= max_429_retries:
+                    raise RuntimeError(
+                        "❌ Doslarb នៅតែបញ្ជូន 429 បន្ទាប់ពីរង់ចាំ និងសាកម្ដងទៀត។ "
+                        "Free plan មានកំណត់ 10 requests/នាទី។ សូមរង់ចាំបន្តិច ហើយសាកម្ដងទៀត។"
+                    ) from e
+
+                retry_after = 0.0
+                try:
+                    retry_after = float(e.headers.get("Retry-After", "0"))
+                except Exception:
+                    retry_after = 0.0
+
+                # If Doslarb supplies Retry-After, honor it. Otherwise use
+                # an increasing backoff, always at least 7 seconds.
+                wait_seconds = max(
+                    7.0,
+                    retry_after,
+                    7.0 * (attempt + 1),
+                )
+
+                st.info(
+                    f"⏳ Doslarb កំពុងកំណត់ល្បឿន។ "
+                    f"កម្មវិធីនឹងរង់ចាំ {wait_seconds:.0f} វិនាទី "
+                    f"ហើយសាកម្ដងទៀត ({attempt + 1}/{max_429_retries})..."
+                )
+                time.sleep(wait_seconds)
+                continue
+
+            if e.code == 401:
+                raise RuntimeError(
+                    "❌ Doslarb API Key មិនត្រឹមត្រូវ ឬត្រូវបានបដិសេធ (401). "
+                    "សូមពិនិត្យ DOSLARB_API_KEY ដែលចាប់ផ្ដើមដោយ ds_sk_."
+                ) from e
+
+            if e.code == 403:
+                detail = body[:500] if body else "គ្មានព័ត៌មានបន្ថែមពី Server"
+                raise RuntimeError(
+                    "❌ Doslarb បដិសេធសំណើ (403 Forbidden).\n\n"
+                    "សូមពិនិត្យ DOSLARB_API_KEY ក្នុង Streamlit Secrets។\n\n"
+                    f"Server response: {detail}"
+                ) from e
+
+            if e.code in (502, 503, 504):
+                if attempt < 2:
+                    time.sleep(7.0)
+                    continue
+                raise RuntimeError(
+                    f"❌ Doslarb TTS មិនអាចប្រើបានបណ្ដោះអាសន្ន ({e.code}). "
+                    "សូមសាកម្ដងទៀត។"
+                ) from e
+
             detail = body[:500] if body else "គ្មានព័ត៌មានបន្ថែមពី Server"
             raise RuntimeError(
-                "❌ Doslarb បដិសេធសំណើ (403 Forbidden).\n\n"
-                "សូមពិនិត្យថា DOSLARB_API_KEY ក្នុង Streamlit Secrets "
-                "ជាកូនសោថ្មីដែលចាប់ផ្ដើមដោយ ds_sk_ និងមិនមាន space ខាងមុខ/ខាងក្រោយ។\n\n"
-                f"Server response: {detail}"
+                f"❌ Doslarb API Error {e.code}: {detail}"
             ) from e
-
-        if e.code == 429:
-            raise RuntimeError(
-                "❌ Doslarb បានដល់ quota/rate limit (429). សូមរង់ចាំបន្តិច ហើយសាកម្ដងទៀត។"
-            ) from e
-
-        if e.code in (502, 503, 504):
-            raise RuntimeError(
-                f"❌ Doslarb TTS មិនអាចប្រើបានបណ្ដោះអាសន្ន ({e.code}). សូមសាកម្ដងទៀត។"
-            ) from e
-
-        detail = body[:500] if body else "គ្មានព័ត៌មានបន្ថែមពី Server"
-        raise RuntimeError(
-            f"❌ Doslarb API Error {e.code}: {detail}"
-        ) from e
 
     if not mp3_data:
         raise RuntimeError("❌ Doslarb មិនបានបញ្ជូនសម្លេង MP3 មកទេ។")
@@ -667,7 +714,6 @@ def generate_doslarb_tts_wav(
     ])
 
     os.remove(mp3_path)
-
 
 def generate_tts_wav(
     client,
@@ -782,7 +828,6 @@ def create_dubbing_audio(
             "មិនអាចបង្កើតសំឡេង AI បានទេ។"
         )
 
-    
     inputs = []
     filters = []
 
