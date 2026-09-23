@@ -346,8 +346,21 @@ def webpage_download(page_url, output_path, cookies=None):
 with st.expander('🌐 បើកវីដេអូក្នុង Tool'):
     page_url = st.text_input('🔗 ដាក់ Link Website / Video', placeholder='https://...', key='web_video_url')
     if page_url.strip():
-        st.markdown(f"<div style=\"position:relative;border-radius:12px;overflow:hidden;border:1px solid #444;\"><iframe src=\"{page_url.strip()}\" style=\"width:100%;height:650px;border:0;\" allow=\"autoplay; fullscreen; picture-in-picture\"></iframe><a href=\"{page_url.strip()}\" target=\"_blank\" style=\"position:absolute;right:14px;top:14px;background:#111;color:#fff;padding:10px 14px;border-radius:50%;font-size:22px;text-decoration:none;\">⬇️</a></div>", unsafe_allow_html=True)
-        st.caption('▶️ វេបសាយត្រូវបានបើកក្នុង Tool។ ប៊ូតុង ⬇️ បើក Link ដើម្បីទាញយក ប្រសិនបើវេបសាយផ្តល់ Download/Video URL។')
+        st.markdown(f'<iframe src="{page_url.strip()}" style="width:100%;height:520px;border:0;border-radius:12px" allow="autoplay; fullscreen; picture-in-picture"></iframe>', unsafe_allow_html=True)
+        if st.button('⬇️ Download Video', key='tool_download_video'):
+            try:
+                out = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                out.close()
+                with st.spinner('កំពុងទាញវីដេអូមកក្នុង Tool...'):
+                    webpage_download(page_url.strip(), out.name)
+                if not video_ok(out.name):
+                    raise RuntimeError('Link នេះមិនបានផ្តល់ Video file ដែលអាចលេងបានទេ')
+                with open(out.name, 'rb') as f:
+                    video_data = f.read()
+                st.video(video_data)
+                st.download_button('📥 Save MP4', video_data, file_name='smey_video.mp4', mime='video/mp4', key='save_tool_video')
+            except Exception as e:
+                st.error(f'❌ Download មិនបាន: {e}')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
