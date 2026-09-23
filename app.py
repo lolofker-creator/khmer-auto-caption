@@ -453,11 +453,25 @@ if st.button('🚀 Auto Caption', type='primary'):
             transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
             words = words_from(transcription)
             if not words:
-                raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
+                  raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
             groups = make_groups(words)
             full_text = ' '.join((item['text'] for item in groups))
             detected = detect_language(full_text)
             st.write(f'🌐 ភាសាដែលបានរកឃើញ: **{detected}**')
             st.write('🔄 3/5 កំពុងបកប្រែ Caption...')
             final_groups = translate_groups(client, groups, target_language)
-   
+            st.write('🎞️ 4/5 កំពុងបង្កើត Caption...')
+            make_ass(final_groups, ass_path)
+            st.write('🔥 5/5 កំពុងបញ្ចូល Caption ទៅក្នុង MP4...')
+            burn(input_video, ass_path, output_video)
+            status.update(label='✅ Auto Caption រួចរាល់!', state='complete')
+        st.success(f'រកឃើញ {len(final_groups)} Caption')
+        st.subheader('📝 Caption Preview')
+        for item in final_groups:
+            st.write(f"`{ass_time(item['start'])} → {ass_time(item['end'])}`  {item['text']}")
+        st.subheader('🎬 Result')
+        st.video(output_video)
+        with open(output_video, 'rb') as f:
+            st.download_button('📥 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
+    except Exception as e:
+        st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
