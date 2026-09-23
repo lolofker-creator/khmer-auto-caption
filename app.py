@@ -293,7 +293,7 @@ st.link_button(
 
 source = st.selectbox(
     "🌐 ភាសាដើម",
-    ["🇨🇳 中文", "Auto Detect"],
+    ["🇨🇳 中文", "🇰🇭 ខ្មែរ", "🇬🇧 English"],
     index=0,
 )
 
@@ -338,7 +338,11 @@ if video:
 
                 with st.spinner("🎙️ កំពុង Auto Caption..."):
                     af = client.files.upload(file=ap)
-                    codes = [] if source == "Auto Detect" else ["zh-CN"]
+                    codes = (
+                        ["zh-CN"] if source == "🇨🇳 中文"
+                        else ["km-KH"] if source == "🇰🇭 ខ្មែរ"
+                        else ["en-US"]
+                    )
 
                     it = client.interactions.create(
                         model="gemini-3.5-transcribe",
@@ -363,8 +367,9 @@ if video:
                 if not groups:
                     raise RuntimeError("❌ មិនរកឃើញ Caption timestamps ទេ។")
 
-                if translate_to_kh or dub:
-                    with st.spinner("🌐 កំពុងបកប្រែទៅខ្មែរ..."):
+                if source in ("🇨🇳 中文", "🇬🇧 English") and (translate_to_kh or dub):
+                    label = "ចិន → ខ្មែរ" if source == "🇨🇳 中文" else "អង់គ្លេស → ខ្មែរ"
+                    with st.spinner(f"🌐 កំពុងបកប្រែ {label}..."):
                         groups = translate(groups, client)
 
                 if caption_btn:
@@ -391,4 +396,4 @@ if video:
             except Exception as e:
                 st.error("❌ មានបញ្ហា")
                 st.exception(e)
-                        
+                
