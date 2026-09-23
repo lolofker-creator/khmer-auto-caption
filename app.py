@@ -561,12 +561,36 @@ def generate_doslarb_tts_wav(
     text,
     output_path,
 ):
-    api_key = st.secrets["DOSLARB_API_KEY"]
+    """Generate Khmer speech with Doslarb Cloud TTS.
+
+    Uses the documented Bearer-token API and browser-like headers because
+    some edge/WAF configurations may reject the default Python urllib UA.
+    """
+    api_key = str(st.secrets.get("DOSLARB_API_KEY", "")).strip()
+
+    if not api_key:
+        raise RuntimeError(
+            "❌ មិនមាន DOSLARB_API_KEY ក្នុង Streamlit Secrets ទេ។"
+        )
+
+    if not api_key.startswith("ds_sk_"):
+        raise RuntimeError(
+            "❌ DOSLARB_API_KEY មិនមានទម្រង់ត្រឹមត្រូវទេ។ "
+            "Doslarb API Key ត្រូវចាប់ផ្ដើមដោយ ds_sk_."
+        )
+
+    clean_text = str(text).strip()
+    if not clean_text:
+        raise ValueError("❌ អត្ថបទសម្រាប់ Doslarb TTS ទទេ។")
+
+    # Doslarb free tier allows up to 1200 Unicode characters per request.
+    if len(clean_text) > 1200:
+        clean_text = clean_text[:1200]
 
     data = json.dumps({
-        "text": text,
+        "text": clean_text,
         "voice": "sovann",
-    }).encode("utf-8")
+    }, ensure_ascii=False).encode("utf-8")
 
     request = urllib.request.Request(
         "https://doslarb.cloud/api/v1/tts",
@@ -574,15 +598,53 @@ def generate_doslarb_tts_wav(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
         },
         method="POST",
     )
 
-    with urllib.request.urlopen(
-        request,
-        timeout=60,
-    ) as response:
-        mp3_data = response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            mp3_data = response.read()
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", "replace").strip()
+        except Exception:
+            body = ""
+
+        if e.code == 401:
+            raise RuntimeError(
+                "❌ Doslarb API Key មិនត្រឹមត្រូវ ឬត្រូវបានបដិសេធ (401). "
+                "សូមបង្កើត API Key ថ្មីដែលចាប់ផ្ដើមដោយ ds_sk_."
+            ) from e
+
+        if e.code == 403:
+            detail = body[:500] if body else "គ្មានព័ត៌មានបន្ថែមពី Server"
+            raise RuntimeError(
+                "❌ Doslarb បដិសេធសំណើ (403 Forbidden).\n\n"
+                "សូមពិនិត្យថា DOSLARB_API_KEY ក្នុង Streamlit Secrets "
+                "ជាកូនសោថ្មីដែលចាប់ផ្ដើមដោយ ds_sk_ និងមិនមាន space ខាងមុខ/ខាងក្រោយ។\n\n"
+                f"Server response: {detail}"
+            ) from e
+
+        if e.code == 429:
+            raise RuntimeError(
+                "❌ Doslarb បានដល់ quota/rate limit (429). សូមរង់ចាំបន្តិច ហើយសាកម្ដងទៀត។"
+            ) from e
+
+        if e.code in (502, 503, 504):
+            raise RuntimeError(
+                f"❌ Doslarb TTS មិនអាចប្រើបានបណ្ដោះអាសន្ន ({e.code}). សូមសាកម្ដងទៀត។"
+            ) from e
+
+        detail = body[:500] if body else "គ្មានព័ត៌មានបន្ថែមពី Server"
+        raise RuntimeError(
+            f"❌ Doslarb API Error {e.code}: {detail}"
+        ) from e
+
+    if not mp3_data:
+        raise RuntimeError("❌ Doslarb មិនបានបញ្ជូនសម្លេង MP3 មកទេ។")
 
     mp3_path = output_path.replace(
         ".wav",
@@ -720,6 +782,7 @@ def create_dubbing_audio(
             "មិនអាចបង្កើតសំឡេង AI បានទេ។"
         )
 
+    
     inputs = []
     filters = []
 
@@ -890,10 +953,10 @@ def burn_caption(
 source_language = st.selectbox(
     "🌐 ភាសាដើម",
     [
-        "🇨🇳 中文",
         "Auto Detect",
         "🇰🇭 ខ្មែរ",
         "🇬🇧 English",
+        "🇨🇳 中文",
         "🇻🇳 Tiếng Việt",
         "🇰🇷 한국어",
         "🇯🇵 日本語",
@@ -934,7 +997,6 @@ dubbing_language = st.selectbox(
         "🇰🇷 한국어",
         "🇯🇵 日本語",
     ],
-    index=0,
     disabled=not enable_dubbing,
 )
 
@@ -948,16 +1010,10 @@ voice_label = st.selectbox(
 )
 
 if enable_dubbing:
-    if dubbing_language == "🇰🇭 ខ្មែរ":
-        st.info(
-            "🇨🇳➡️🇰🇭 រឿងចិន → បកប្រែជាខ្មែរ → សំឡេង AI ខ្មែរ។ "
-            "មិនចាំបាច់ជ្រើស 'បកប្រែទៅជា' ទៀតទេ។"
-        )
-    else:
-        st.info(
-            "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
-            "ហើយជំនួសសំឡេងដើម។"
-        )
+    st.info(
+        "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
+        "ហើយជំនួសសំឡេងដើម។"
+    )
 
     if dubbing_language == "🇰🇭 ខ្មែរ":
         st.caption(
@@ -1127,15 +1183,7 @@ if video is not None:
                 # Auto Translate
                 # ---------------------------------
 
-                # AI Dubbing អាចជ្រើសភាសារបស់វាដោយផ្ទាល់
-                # មិនបង្ខំឱ្យអ្នកជ្រើស "បកប្រែទៅជា" ទៀតទេ។
-                dubbing_target_language = (
-                    dubbing_language
-                    if dubbing_clicked and enable_dubbing
-                    else target_language
-                )
-
-                if dubbing_target_language != "មិនបកប្រែ":
+                if target_language != "មិនបកប្រែ":
                     with st.spinner(
                         "🌐 Gemini កំពុងបកប្រែ Caption..."
                     ):
@@ -1143,7 +1191,7 @@ if video is not None:
                             client,
                             groups,
                             source_language,
-                            dubbing_target_language,
+                            target_language,
                         )
 
 
@@ -1190,8 +1238,19 @@ if video is not None:
                         )
                         st.stop()
 
-                    # មិនចាំបាច់ឱ្យ "បកប្រែទៅជា" ត្រូវបានជ្រើសទៀតទេ។
-                    # AI Dubbing ប្រើ "ភាសាសំឡេង AI" ជាភាសាគោល។
+                    if target_language == "មិនបកប្រែ":
+                        st.warning(
+                            "⚠️ សូមជ្រើសភាសានៅ "
+                            "'បកប្រែទៅជា' សម្រាប់ AI Dubbing។"
+                        )
+                        st.stop()
+
+                    if target_language != dubbing_language:
+                        st.warning(
+                            "⚠️ 'បកប្រែទៅជា' និង "
+                            "'ភាសាសំឡេង AI' ត្រូវជ្រើសភាសាដូចគ្នា។"
+                        )
+                        st.stop()
 
                     with st.spinner(
                         "🎙️ កំពុងបង្កើតសំឡេង AI..."
