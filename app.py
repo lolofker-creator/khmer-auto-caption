@@ -312,28 +312,22 @@ def page_media_download(page_url, output_path):
             pass
     raise RuntimeError('រកមិនឃើញវីដេអូដែលអាចទាញយកបានក្នុង Link នេះ')
 
-def webpage_download(page_url, output_path):
-    # Direct normal video URL. HLS/M3U8 goes through yt-dlp.
+def webpage_download(page_url, output_path, cookies=None):
     if re.search(r'\.(?:mp4|webm|mov|mkv)(?:\?|$)', page_url, re.I):
         try:
             return download_media_url(page_url, output_path)
         except Exception:
             pass
-
     try:
         import yt_dlp
         options = {
-            'outtmpl': output_path,
-            'format': 'bv*+ba/b',
-            'merge_output_format': 'mp4',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'ffmpeg_location': ffmpeg(),
-            'retries': 5,
-            'fragment_retries': 5,
-            'socket_timeout': 30,
+            'outtmpl': output_path, 'format': 'bv*+ba/b',
+            'merge_output_format': 'mp4', 'noplaylist': True,
+            'quiet': True, 'no_warnings': True, 'ffmpeg_location': ffmpeg(),
+            'retries': 5, 'fragment_retries': 5, 'socket_timeout': 30,
         }
+        if cookies:
+            options['cookiefile'] = cookies
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([page_url])
         if video_ok(output_path):
@@ -347,26 +341,31 @@ def webpage_download(page_url, output_path):
                 return output_path
     except Exception:
         pass
-
     return page_media_download(page_url, output_path)
 
 with st.expander('⬇️ Download Video'):
     page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
+    cookies_file = st.file_uploader('🔐 Cookies (សម្រាប់ Private ដែលអ្នកមានសិទ្ធិចូល)', type=['txt'], key='download_cookies')
     if st.button('⬇️ Download'):
         if not page_url.strip():
             st.warning('សូមដាក់ Link ជាមុន')
         else:
             try:
                 with st.spinner('កំពុង Download...'):
+                    cookie_path = None
+                    if cookies_file:
+                        cookie_path = os.path.join(tempfile.mkdtemp(), 'cookies.txt')
+                        with open(cookie_path, 'wb') as f:
+                            f.write(cookies_file.getvalue())
                     output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                     output.close()
-                    webpage_download(page_url.strip(), output.name)
+                    webpage_download(page_url.strip(), output.name, cookie_path)
                 st.success('✅ រួចរាល់')
                 st.video(output.name)
                 with open(output.name, 'rb') as f:
                     st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
             except Exception:
-                st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
+                st.error('មិនអាច Download បានទេ។ សម្រាប់ Private សូមប្រើ Cookies របស់គណនីដែលមានសិទ្ធិចូល។ DRM នៅតែមិនអាចរំលងបាន។')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
