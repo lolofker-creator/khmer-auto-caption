@@ -114,28 +114,40 @@ def gemini_tts(text, out):
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash-preview-tts",
+        model="gemini-3.1-flash-tts-preview",
         contents=text,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Kore"
+                        voice_name="Kore",
                     )
                 )
             ),
         ),
     )
 
-    audio = response.candidates[0].content.parts[0].inline_data
-    raw = base64.b64decode(audio.data) if isinstance(audio.data, str) else audio.data
+    try:
+        part = response.candidates[0].content.parts[0]
+        audio = part.inline_data
+        data = audio.data
 
-    with wave.open(out, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(24000)
-        wf.writeframes(raw)
+        if isinstance(data, str):
+            import base64
+            data = base64.b64decode(data)
+
+        with wave.open(out, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(data)
+
+    except (AttributeError, IndexError, TypeError) as e:
+        raise RuntimeError(
+            "❌ Gemini មិនបានផ្ញើ Audio មកទេ។ "
+            "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
+        ) from e
 
 def duration(path):
     with wave.open(path, "rb") as w:
@@ -260,7 +272,7 @@ def replace_audio(video, audio, out):
 
 # ---------- UI ----------
 st.title("🇰🇭 Smey Auto Caption")
-st.caption("🇨🇳 Chinese → Auto Caption → Khmer → Sovann → Auto Sync → MP4")
+st.caption("🇨🇳 Chinese → Auto Caption → Khmer → Gemini Voice → Auto Sync → MP4")
 
 st.link_button(
     "📱 ទាក់ទងម្ចាស់តាម Telegram",
@@ -269,16 +281,16 @@ st.link_button(
 )
 
 # ---------- Sovann Voice Test ----------
-st.subheader("🎧 សាកសំឡេង Sovann")
+st.subheader("🎧 សាកសំឡេង Gemini")
 st.caption("វាយប្រយោគខ្មែរខ្លីៗ រួចចុចប៊ូតុង ដើម្បីស្តាប់សំឡេងមុនយកទៅ Dubbing។")
 test_text = st.text_area(
     "📝 អត្ថបទសម្រាប់សាក",
-    value="សួស្តីបងប្អូន! ថ្ងៃនេះយើងមកសាកសំឡេង Sovann។",
+    value="សួស្តីបងប្អូន! ថ្ងៃនេះយើងមកសាកសំឡេង Gemini។",
     height=90,
     max_chars=1200,
 )
 
-if st.button("🔊 សាកសំឡេង Sovann", use_container_width=True):
+if st.button("🔊 សាកសំឡេង Gemini", use_container_width=True):
     if not test_text.strip():
         st.warning("⚠️ សូមបញ្ចូលអត្ថបទសិន។")
     else:
@@ -440,4 +452,4 @@ if video:
             except Exception as e:
                 st.error("❌ មានបញ្ហា")
                 st.exception(e)
-
+                    
