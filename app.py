@@ -63,12 +63,6 @@ def ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def sec(value):
-    try:
-        return float(value)
-    except Exception:
-        return 0.0
-
 
 def ass_time(value):
     value = max(0.0, float(value))
@@ -83,27 +77,23 @@ def get_gemini_client(api_key):
     return genai.Client(api_key=api_key)
 
 
-def retry_gemini(call, attempts=3, delay=3):
+def retry_gemini(call, attempts=4, delay=2):
+    """Retry only temporary Gemini errors (429/5xx)."""
     last_error = None
 
     for attempt in range(attempts):
         try:
             return call()
-        except Exception as e:
-            last_error = e
-            message = str(e).lower()
-            temporary = (
-                "429" in message
-                or "503" in message
-                or "unavailable" in message
-                or "overloaded" in message
-                or "resource_exhausted" in message
+        except Exception as exc:
+            last_error = exc
+            message = str(exc).lower()
+            temporary = any(
+                code in message
+                for code in ("429", "500", "502", "503", "504", "unavailable", "resource_exhausted")
             )
-
             if not temporary or attempt == attempts - 1:
                 raise
-
-            time.sleep(delay * (attempt + 1))
+            time.sleep(delay * (2 ** attempt))
 
     raise last_error
 
@@ -325,23 +315,18 @@ def translate_groups(client, groups, target_language):
         return groups
 
     translated = []
+    batch_size = 15
 
-    for start in range(0, len(groups), 30):
-        batch = groups[start:start + 30]
+    for start in range(0, len(groups), batch_size):
+        batch = groups[start:start + batch_size]
         texts = [item["text"] for item in batch]
 
-        prompt = f"""
-Translate each subtitle line into {target_language}.
-
-Rules:
-- Return exactly one translated line for each input line.
-- Keep the same order.
-- Do not add explanations.
-- Keep names and numbers accurate.
-
-Input:
-{texts}
-"""
+        prompt = (
+            f"Translate each subtitle line into {target_language}.\n"
+            "Return exactly one translated line per input line, in the same order. "
+            "Do not add explanations. Keep names and numbers accurate.\n\n"
+            f"Input:\n{texts}"
+        )
 
         schema = types.Schema(
             type=types.Type.ARRAY,
@@ -358,23 +343,31 @@ Input:
                 ),
             )
 
-        response = retry_gemini(call)
-        values = get_value(response, "parsed", None)
+        try:
+            response = retry_gemini(call)
+            values = get_value(response, "parsed", None)
 
-        if values is None:
-            raw = get_value(response, "text", "") or ""
-            try:
-                values = json.loads(raw)
-            except Exception:
-                values = []
+            if values is None:
+                raw = get_value(response, "text", "") or ""
+                try:
+                    values = json.loads(raw)
+                except Exception:
+                    values = []
 
-        if not isinstance(values, list):
-            values = []
+            if not isinstance(values, list) or len(values) != len(batch):
+                raise RuntimeError("Translation response មិនត្រឹមត្រូវ")
+
+        except Exception as exc:
+            # Keep the Auto Caption pipeline usable if translation service is temporarily unavailable.
+            st.warning(
+                "⚠️ Gemini Translation មិនទាន់អាចប្រើបាន។ "
+                "Caption នឹងរក្សាភាសាដើមសម្រាប់ផ្នែកនេះ។"
+            )
+            values = [item["text"] for item in batch]
 
         for index, item in enumerate(batch):
-            text = values[index] if index < len(values) else item["text"]
             translated.append({
-                "text": str(text),
+                "text": str(values[index]),
                 "start": item["start"],
                 "end": item["end"],
             })
@@ -855,5 +848,4 @@ if st.button("🚀 Auto Caption", type="primary"):
             )
 
     except Exception as e:
-        st.error("❌ Auto Caption មានបញ្ហា")
-        st.exception(e)
+        st.error(f"❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}")
