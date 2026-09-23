@@ -195,6 +195,71 @@ def burn(video, ass, output):
 
 
 
+
+
+def extract_audio(video_path, audio_path):
+    """Extract mono 16 kHz WAV. Try PyAV first so a broken FFmpeg process
+    does not crash the Streamlit app with exit code -11; fall back to FFmpeg."""
+    av_error = None
+    try:
+        import av
+        import wave
+
+        container = av.open(video_path, mode="r")
+        audio_stream = next((st for st in container.streams if st.type == "audio"), None)
+        if audio_stream is None:
+            container.close()
+            raise RuntimeError("វីដេអូនេះមិនមាន Audio stream ទេ។")
+
+        resampler = av.audio.resampler.AudioResampler(
+            format="s16",
+            layout="mono",
+            rate=16000,
+        )
+
+        with wave.open(audio_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+
+            for frame in container.decode(audio_stream):
+                for out_frame in resampler.resample(frame):
+                    arr = out_frame.to_ndarray()
+                    wf.writeframes(arr.tobytes())
+
+        container.close()
+
+        if os.path.exists(audio_path) and os.path.getsize(audio_path) >= 1000:
+            return
+    except Exception as e:
+        av_error = e
+        try:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+        except OSError:
+            pass
+
+    # Fallback for files PyAV cannot decode.
+    try:
+        ffmpeg([
+            "-y",
+            "-i", video_path,
+            "-map", "0:a:0?",
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-c:a", "pcm_s16le",
+            audio_path,
+        ])
+    except Exception as ff_error:
+        if av_error:
+            raise RuntimeError(
+                "❌ មិនអាចអាន Audio ពីវីដេអូបានទេ។\n\n"
+                f"PyAV: {str(av_error)[-1200:]}\n\n"
+                f"FFmpeg: {str(ff_error)[-1800:]}"
+            ) from ff_error
+        raise
+
 def gemini_tts(text, output_path):
     client = genai.Client(
         api_key=st.secrets["GEMINI_API_KEY"]
@@ -567,23 +632,11 @@ if video:
 
             try:
                 with st.spinner("🎵 កំពុងដកសំឡេង..."):
-                    # Explicitly select the first audio stream. This gives a
-                    # clear error when the uploaded/downloaded video has no audio.
-                    ffmpeg([
-                        "-y",
-                        "-i", video_path,
-                        "-map", "0:a:0",
-                        "-vn",
-                        "-ac", "1",
-                        "-ar", "16000",
-                        "-c:a", "pcm_s16le",
-                        audio_path,
-                    ])
+                    extract_audio(video_path, audio_path)
 
                 if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
                     raise RuntimeError(
-                        "❌ វីដេអូនេះមិនមាន Audio ដែលអាចអានបានទេ។ "
-                        "សូមសាក Upload វីដេអូដែលមានសំឡេង។"
+                        "❌ មិនអាចបង្កើត Audio file បានទេ។ សូមពិនិត្យថាវីដេអូមានសំឡេង។"
                     )
 
                 client = genai.Client(
@@ -664,4 +717,3 @@ if video:
                 st.error("❌ Auto Caption មិនបាន")
                 st.warning(str(e))
                 st.caption("💡 បើ Error និយាយពី Audio/Stream វីដេអូអាចមិនមានសំឡេង ឬ File មិនពេញលេញ។")
-                    
