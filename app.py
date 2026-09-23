@@ -202,8 +202,7 @@ def show_login():
 
 
 def show_admin_panel():
-    st.title("👑 Smey Auto Caption — Admin")
-    st.caption("ផ្ទាំងម្ចាស់កម្មវិធី")
+    st.caption("👑 ម្ចាស់កម្មវិធី")
 
     st.link_button(
         "📱 Telegram របស់ម្ចាស់",
@@ -231,21 +230,29 @@ if not st.session_state.logged_in:
     show_login()
     st.stop()
 
+# Admin អាចប្រើ Caption Tool បានដែរ។
+# មិនបង្ហាញផ្នែកបង្កើត Account ហើយក៏មិនបញ្ឈប់កម្មវិធីនៅ Admin page ទេ។
 if st.session_state.is_admin:
     show_admin_panel()
-    st.stop()
 
-current_account = st.session_state.get("account") or {}
-if not current_account.get("active", False):
-    st.session_state.clear()
-    st.error("⛔ Account នេះត្រូវបានបិទ។")
-    st.stop()
+else:
+    current_account = st.session_state.get("account") or {}
 
-st.sidebar.success(f"👤 {current_account.get('username', '')}")
-st.sidebar.link_button("📱 ទាក់ទងម្ចាស់តាម Telegram", TELEGRAM_URL, use_container_width=True)
-if st.sidebar.button("🚪 ចាកចេញ"):
-    st.session_state.clear()
-    st.rerun()
+    if not current_account.get("active", False):
+        st.session_state.clear()
+        st.error("⛔ Account នេះត្រូវបានបិទ។")
+        st.stop()
+
+    st.sidebar.success(f"👤 {current_account.get('username', '')}")
+    st.sidebar.link_button(
+        "📱 ទាក់ទងម្ចាស់តាម Telegram",
+        TELEGRAM_URL,
+        use_container_width=True,
+    )
+
+    if st.sidebar.button("🚪 ចាកចេញ"):
+        st.session_state.clear()
+        st.rerun()
 
 
 # Authentication is shown before the caption tool.
@@ -1216,4 +1223,3 @@ if video is not None:
                 )
 
                 st.exception(e)
-  
