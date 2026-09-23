@@ -476,26 +476,6 @@ with st.expander('🎙️ Text → Free Voice'):
                 with open(output.name, 'rb') as f:
                     audio_data = f.read()
                 st.audio(audio_data, format='audio/mp3')
-                   st.download_button('📥 Save MP4', video_data, file_name='smey_video.mp4', mime='video/mp4', key='save_tool_video')
-            except Exception as e:
-                st.error(f'❌ Download មិនបាន: {e}')
-
-with st.expander('🎙️ Text → Free Voice'):
-    tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
-    tts_language = st.selectbox('ភាសាសំឡេង', ['Khmer', 'Chinese', 'English'], key='tts_language')
-    tts_lang_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
-    if st.button('🎙️ Generate Voice', key='free_tts_button'):
-        if not tts_text.strip():
-            st.warning('សូមបញ្ចូលអត្ថបទជាមុន')
-        else:
-            try:
-                output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                output.close()
-                with st.spinner('កំពុងបង្កើតសំឡេង Free...'):
-                    free_tts(tts_text, output.name, tts_lang_map[tts_language])
-                with open(output.name, 'rb') as f:
-                    audio_data = f.read()
-                st.audio(audio_data, format='audio/mp3')
                 st.download_button('📥 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
             except Exception as e:
                 st.error(f'❌ Voice Error: {e}')
