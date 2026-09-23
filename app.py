@@ -11,6 +11,11 @@ import secrets
 
 from datetime import datetime, timezone
 
+st.set_page_config(
+    page_title="Smey Auto Caption",
+    page_icon="🇰🇭",
+)
+
 import requests
 import streamlit as st
 from google import genai
@@ -219,7 +224,7 @@ def show_admin_panel():
 
     if create_clicked:
         try:
-            account = create_account(username, password)
+            create_account(username, password)
             st.success(f"✅ បង្កើត Account `{username.strip()}` រួចរាល់។")
             st.info("សូមផ្ញើ Username និង Password ឲ្យអ្នកប្រើដោយផ្ទាល់។")
         except Exception as e:
@@ -227,36 +232,7 @@ def show_admin_panel():
             st.exception(e)
 
     st.divider()
-    st.subheader("👥 Account អតិថិជន")
-
-    try:
-        accounts = list_accounts()
-        if not accounts:
-            st.info("មិនទាន់មាន Account អតិថិជនទេ។")
-            return
-
-        for account in accounts:
-            status = "🟢 កំពុងប្រើ" if account.get("active") else "🔴 បិទ"
-            with st.expander(f"👤 {account['username']} — {status}"):
-                c1, c2 = st.columns(2)
-                if account.get("active"):
-                    if c1.button("🚫 បិទ Account", key=f"disable_{account['id']}"):
-                        try:
-                            update_account_status(account["id"], False)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(str(e))
-                else:
-                    if c1.button("✅ បើក Account", key=f"enable_{account['id']}"):
-                        try:
-                            update_account_status(account["id"], True)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(str(e))
-                c2.caption("គ្មាន Plan និងគ្មានថ្ងៃផុតកំណត់")
-    except Exception as e:
-        st.error("❌ មិនអាចអានបញ្ជី Account បានទេ។")
-        st.exception(e)
+    st.caption("ℹ️ គ្មាន Plan • គ្មាន Package • គ្មានថ្ងៃផុតកំណត់")
 
 
 # =========================================================
@@ -290,11 +266,8 @@ if st.sidebar.button("🚪 ចាកចេញ"):
     st.session_state.clear()
     st.rerun()
 
-st.set_page_config(
-    page_title="Smey Auto Caption",
-    page_icon="🇰🇭",
-)
 
+# Authentication is shown before the caption tool.
 st.title("🇰🇭 Smey Auto Caption")
 st.write("Gemini → Caption → Auto Translate → AI Dubbing → MP4")
 
@@ -852,7 +825,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f.write(
                 f"Dialogue: 0,"
                 f"{ass_time(group['start'])},"
-                f"{ass_time(group['end'])},"
+                   f"{ass_time(group['end'])},"
                 f"Khmer,,0,0,0,,"
                 f"{text}\n"
             )
