@@ -6,49 +6,66 @@ import urllib.request
 import base64
 import time
 import wave
+import json
 
 import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
 
-st.set_page_config(page_title="Smey Auto Caption", page_icon="🇰🇭", layout="centered")
+# ============================================================
+# 🇰🇭 Smey Auto Caption
+# Gemini → Caption → Auto Translate → MP4
+# ============================================================
 
-TELEGRAM_URL = "https://t.me/Smeytk"
-USER_AGENT = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+st.set_page_config(page_title="🇰🇭 Smey Auto Caption", page_icon="🇰🇭")
+
+st.title("🇰🇭 Smey Auto Caption")
+st.caption("Gemini → Caption → Auto Translate → MP4")
+st.markdown(
+    "📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** "
+    "[Telegram @Smeytk](https://t.me/Smeytk)"
+)
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
+TRANSLATE_MODEL = "gemini-3.1-flash-lite"
+TTS_MODEL = "gemini-3.1-flash-tts-preview"
+TTS_VOICE = "Kore"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_DIR = os.path.join(BASE_DIR, "fonts")
+FONT_PATH = os.path.join(FONT_DIR, "NotoSansKhmer-Regular.ttf")
+
+# The app can install the free Noto Sans Khmer font automatically.
+# This avoids requiring the user to manually add a font file.
+FONT_URL = (
+    "https://raw.githubusercontent.com/ghostlypi/NotoSans/main/"
+    "NotoSansKhmer-Regular.ttf"
+)
+
+# ============================================================
+# COMMON HELPERS
+# ============================================================
+
+def get_value(obj, name, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
 
 
-# ------------------------- Common helpers -------------------------
-
-def get_value(obj, *names):
-    for name in names:
-        if isinstance(obj, dict) and name in obj:
-            return obj[name]
-        try:
-            value = getattr(obj, name, None)
-        except Exception:
-            value = None
-        if value is not None:
-            return value
-    return None
-
-
-def ffmpeg(args):
-    cmd = [
-        imageio_ffmpeg.get_ffmpeg_exe(),
-        "-hide_banner", "-loglevel", "error", "-nostdin",
-        *args,
-    ]
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if p.returncode:
-        err = (p.stderr or p.stdout).decode("utf-8", errors="ignore").strip()
-        raise RuntimeError(err[-4000:] or f"FFmpeg exit code: {p.returncode}")
-    return p
+def ffmpeg():
+    return imageio_ffmpeg.get_ffmpeg_exe()
 
 
 def sec(value):
     try:
-        return float(str(value).replace("s", ""))
+        return float(value)
     except Exception:
         return 0.0
 
@@ -56,487 +73,746 @@ def sec(value):
 def ass_time(value):
     value = max(0.0, float(value))
     h = int(value // 3600)
-    m = int(value % 3600 // 60)
-    s = int(value % 60)
-    cs = min(99, int((value - int(value)) * 100))
-    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+    m = int((value % 3600) // 60)
+    s = value % 60
+    return f"{h}:{m:02d}:{s:05.2f}"
 
 
 @st.cache_resource
-def get_gemini_client():
-    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+def get_gemini_client(api_key):
+    return genai.Client(api_key=api_key)
 
 
-# ------------------------- Gemini transcription -------------------------
+def retry_gemini(call, attempts=3, delay=3):
+    last_error = None
 
-def add_word(words, item):
-    word = get_value(item, "text", "word")
-    start = get_value(item, "start_offset", "startOffset")
-    end = get_value(item, "end_offset", "endOffset")
-    if word and start is not None and end is not None:
-        words.append({"text": str(word).strip(), "start": sec(start), "end": sec(end)})
+    for attempt in range(attempts):
+        try:
+            return call()
+        except Exception as e:
+            last_error = e
+            message = str(e).lower()
+            temporary = (
+                "429" in message
+                or "503" in message
+                or "unavailable" in message
+                or "overloaded" in message
+                or "resource_exhausted" in message
+            )
+
+            if not temporary or attempt == attempts - 1:
+                raise
+
+            time.sleep(delay * (attempt + 1))
+
+    raise last_error
+
+
+def ensure_khmer_font():
+    """Ensure the free Noto Sans Khmer font exists locally."""
+    os.makedirs(FONT_DIR, exist_ok=True)
+
+    if os.path.isfile(FONT_PATH) and os.path.getsize(FONT_PATH) > 10_000:
+        return FONT_PATH
+
+    try:
+        request = urllib.request.Request(
+            FONT_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read()
+
+        if len(data) < 10_000:
+            raise RuntimeError("Font file ដែលទាញយកមកមានទំហំមិនត្រឹមត្រូវ")
+
+        with open(FONT_PATH, "wb") as f:
+            f.write(data)
+
+        return FONT_PATH
+    except Exception as e:
+        raise RuntimeError(
+            "មិនអាចរក/ទាញយក Noto Sans Khmer Font បាន។ "
+            f"សូមពិនិត្យ Internet របស់ Streamlit Cloud។\n{e}"
+        ) from e
+
+# ============================================================
+# WORD / TRANSCRIPTION HELPERS
+# ============================================================
+
+def add_word(result, word, start=None, end=None):
+    text = get_value(word, "word", None)
+    if text is None:
+        text = get_value(word, "text", "")
+    if not text:
+        return
+
+    if start is None:
+        start = get_value(word, "start_time", None)
+    if end is None:
+        end = get_value(word, "end_time", None)
+    if start is None:
+        start = get_value(word, "start", 0)
+    if end is None:
+        end = get_value(word, "end", start)
+
+    result.append({
+        "text": str(text),
+        "start": sec(start),
+        "end": sec(end),
+    })
 
 
 def words_from(response):
-    """Read Gemini word timing from current/legacy response shapes."""
     words = []
 
-    def walk(obj, depth=0):
-        if obj is None or depth > 8 or isinstance(obj, (str, bytes, int, float, bool)):
-            return
+    transcription = get_value(response, "audio_transcription", None)
+    if transcription is not None:
+        current_words = get_value(transcription, "words", None)
+        if current_words:
+            for word in current_words:
+                add_word(words, word)
 
-        transcription = get_value(obj, "audio_transcription", "audioTranscription")
-        if transcription is not None:
-            for item in (get_value(transcription, "words") or []):
-                add_word(words, item)
+    direct_words = get_value(response, "words", None)
+    if direct_words:
+        for word in direct_words:
+            add_word(words, word)
 
-        for annotation in (get_value(obj, "annotations") or []):
-            if get_value(annotation, "type") == "word_info":
-                add_word(words, annotation)
-
-        for key in ("parts", "content", "candidates", "output", "steps"):
-            child = get_value(obj, key)
-            if child is not None:
-                if isinstance(child, (list, tuple)):
-                    for item in child:
-                        walk(item, depth + 1)
-                else:
-                    walk(child, depth + 1)
-
-    walk(response)
-
-    unique = {}
-    for word in words:
-        if word["text"]:
-            key = (word["text"], round(word["start"], 3), round(word["end"], 3))
-            unique[key] = word
-    return sorted(unique.values(), key=lambda x: (x["start"], x["end"]))
-
-
-def detect_language(words):
-    text = "".join(w["text"] for w in words)
-    khmer = sum("\u1780" <= c <= "\u17ff" for c in text)
-    chinese = sum("\u3400" <= c <= "\u4dbf" or "\u4e00" <= c <= "\u9fff" for c in text)
-    if khmer >= 3 and khmer > chinese:
-        return "🇰🇭 ខ្មែរ"
-    if chinese >= 3 and chinese > khmer:
-        return "🇨🇳 中文"
-    return "🤖 មិនប្រាកដ"
-
-
-def make_groups(words, max_words=10, max_seconds=4):
-    groups, current = [], []
-    start = end = None
-
-    for word in words:
-        text = word["text"].strip()
-        if not text:
-            continue
-        s, e = float(word["start"]), float(word["end"])
-        if start is None:
-            start = s
-        current.append(text)
-        end = e
-        if len(current) >= max_words or e - start >= max_seconds:
-            groups.append({"start": start, "end": end, "text": " ".join(current)})
-            current, start, end = [], None, None
-
-    if current:
-        groups.append({"start": start, "end": end, "text": " ".join(current)})
-    return groups
-
-
-def transcribe(video_audio_path, source):
-    client = get_gemini_client()
-    audio_file = client.files.upload(file=video_audio_path)
-    language_codes = {
-        "🇨🇳 中文": ["cmn-Hans-CN"],
-        "🇰🇭 ខ្មែរ": ["km-KH"],
-    }.get(source, [])
-
-    response = client.models.generate_content(
-        model="gemini-3.5-transcribe",
-        contents=[audio_file],
-        config=types.GenerateContentConfig(
-            audio_transcription_config=types.AudioTranscriptionConfig(
-                word_timestamp=True,
-                language_codes=language_codes,
+    annotations = get_value(response, "annotations", None)
+    if annotations:
+        for item in annotations:
+            add_word(
+                words,
+                item,
+                get_value(item, "start_time", 0),
+                get_value(item, "end_time", 0),
             )
-        ),
-    )
-    words = words_from(response)
-    if not words:
-        transcript = getattr(response, "text", "") or ""
-        raise RuntimeError(
-            "Gemini បានស្តាប់សំឡេង ប៉ុន្តែមិនបានផ្ញើ Word Timing មកទេ."
-            + (f"\n\nTranscript: {transcript[:1000]}" if transcript else "")
-        )
+
     return words
 
 
-# ------------------------- Translation -------------------------
+def detect_language(text):
+    khmer = len(re.findall(r"[\u1780-\u17FF]", text))
+    chinese = len(re.findall(r"[\u4E00-\u9FFF]", text))
 
-def translate_groups(groups, source, target):
-    if not groups or target == "🚫 មិនបកប្រែ" or source == target:
-        return groups
+    if khmer > chinese and khmer > 0:
+        return "Khmer"
+    if chinese > 0:
+        return "Chinese"
+    return "Unknown"
 
-    client = get_gemini_client()
-    source_name = "Chinese" if source == "🇨🇳 中文" else "Khmer"
-    target_name = "Chinese (Simplified)" if target == "🇨🇳 中文" else "Khmer"
-    translated = []
 
-    for i in range(0, len(groups), 30):
-        batch = groups[i:i + 30]
-        prompt = (
-            f"Translate these {source_name} captions into natural {target_name}. "
-            "Return ONLY a JSON array, exactly one string per input, same order. "
-            "Keep names and meaning accurate.\n\n"
-            + "\n".join(f"{n + 1}. {g['text']}" for n, g in enumerate(batch))
+def make_groups(words, max_words=12, max_seconds=5.0):
+    groups = []
+    current = []
+
+    for word in words:
+        if not current:
+            current = [word]
+            continue
+
+        duration = word["end"] - current[0]["start"]
+        if len(current) >= max_words or duration >= max_seconds:
+            groups.append(current)
+            current = [word]
+        else:
+            current.append(word)
+
+    if current:
+        groups.append(current)
+
+    result = []
+    for group in groups:
+        text = " ".join(x["text"] for x in group).strip()
+        if text:
+            result.append({
+                "text": text,
+                "start": group[0]["start"],
+                "end": group[-1]["end"],
+            })
+
+    return result
+
+# ============================================================
+# GEMINI TRANSCRIPTION
+# ============================================================
+
+def transcribe(client, audio_path, source_language):
+    with open(audio_path, "rb") as f:
+        audio_data = f.read()
+
+    prompt = (
+        "Transcribe the spoken audio exactly. "
+        "Return accurate word-level timestamps. "
+        "Do not translate the speech."
+    )
+
+    language_codes = None
+    if source_language == "Chinese":
+        language_codes = ["cmn-Hans-CN"]
+    elif source_language == "Khmer":
+        language_codes = ["km-KH"]
+
+    config_kwargs = {
+        "response_modalities": ["TEXT"],
+        "word_timestamp": True,
+    }
+    if language_codes:
+        config_kwargs["language_codes"] = language_codes
+
+    def call():
+        return client.models.generate_content(
+            model=TRANSCRIBE_MODEL,
+            contents=[
+                types.Part.from_bytes(
+                    data=audio_data,
+                    mime_type="audio/wav",
+                ),
+                prompt,
+            ],
+            config=types.GenerateContentConfig(**config_kwargs),
         )
 
-        answer = None
-        for attempt in range(2):
+    return retry_gemini(call)
+
+# ============================================================
+# TRANSLATION
+# ============================================================
+
+def translate_groups(client, groups, target_language):
+    if not groups or target_language == "No translation":
+        return groups
+
+    translated = []
+
+    for start in range(0, len(groups), 30):
+        batch = groups[start:start + 30]
+        texts = [item["text"] for item in batch]
+
+        prompt = f"""
+Translate each subtitle line into {target_language}.
+
+Rules:
+- Return exactly one translated line for each input line.
+- Keep the same order.
+- Do not add explanations.
+- Keep names and numbers accurate.
+
+Input:
+{texts}
+"""
+
+        schema = types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(type=types.Type.STRING),
+        )
+
+        def call():
+            return client.models.generate_content(
+                model=TRANSLATE_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                ),
+            )
+
+        response = retry_gemini(call)
+        values = get_value(response, "parsed", None)
+
+        if values is None:
+            raw = get_value(response, "text", "") or ""
             try:
-                result = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=list[str],
-                    ),
-                )
-                if result.parsed and len(result.parsed) == len(batch):
-                    answer = [str(x).strip() for x in result.parsed]
-                    break
-            except Exception as exc:
-                if "429" not in str(exc) and "RESOURCE_EXHAUSTED" not in str(exc):
-                    raise
-                if attempt == 0:
-                    time.sleep(5)
+                values = json.loads(raw)
+            except Exception:
+                values = []
 
-        translated.extend(answer or [g["text"] for g in batch])
+        if not isinstance(values, list):
+            values = []
 
-    return [{**g, "text": text} for g, text in zip(groups, translated)]
+        for index, item in enumerate(batch):
+            text = values[index] if index < len(values) else item["text"]
+            translated.append({
+                "text": str(text),
+                "start": item["start"],
+                "end": item["end"],
+            })
 
+    return translated
 
-# ------------------------- Caption rendering -------------------------
+# ============================================================
+# ASS CAPTION — KHMER SAFE
+# ============================================================
 
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: 1920
+PlayResY: 1080
 ScaledBorderAndShadow: yes
+WrapStyle: 2
+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Khmer,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,1,0,0,0,100,100,0,0,3,3,1,2,50,50,220,1
+Style: Default,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,55,1
+
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
 
-def make_ass(groups, path):
-    with open(path, "w", encoding="utf-8") as f:
+def make_ass(groups, ass_path):
+    with open(ass_path, "w", encoding="utf-8-sig") as f:
         f.write(ASS_HEADER)
-        for g in groups:
-            text = g["text"].replace("\n", " ").replace("{", r"\{").replace("}", r"\}")
+
+        for item in groups:
+            text = (
+                item["text"]
+                .replace("\\", r"\\")
+                .replace("{", r"\{")
+                .replace("}", r"\}")
+                .replace("\n", r"\N")
+            )
+
             f.write(
-                f"Dialogue: 0,{ass_time(g['start'])},{ass_time(g['end'])},"
-                f"Khmer,,0,0,0,,{text}\n"
+                f"Dialogue: 0,{ass_time(item['start'])},"
+                f"{ass_time(item['end'])},Default,,0,0,0,,{text}\n"
             )
 
 
-def burn(video, ass, output):
-    ass_path = ass.replace("\\", "/").replace(":", r"\:")
-    ffmpeg([
-        "-y", "-i", video,
-        "-vf", f"ass='{ass_path}'",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
-        output,
-    ])
+def burn(video_path, ass_path, output_path):
+    ensure_khmer_font()
+    font_dir = FONT_DIR.replace("\\", "/")
+    ass_file = ass_path.replace("\\", "/")
 
+    # shaping=complex is important for Khmer script rendering.
+    vf = (
+        f"ass=filename='{ass_file}':"
+        f"fontsdir='{font_dir}':"
+        f"shaping=complex"
+    )
 
-# ------------------------- Audio extraction -------------------------
+    command = [
+        ffmpeg(),
+        "-y",
+        "-i", video_path,
+        "-vf", vf,
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "20",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        output_path,
+    ]
 
-def extract_audio(video_path, audio_path):
-    """PyAV first (avoids the previous FFmpeg -11 issue), FFmpeg fallback."""
-    av_error = None
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if result.returncode != 0:
+        error = result.stderr.decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            "FFmpeg បញ្ចូល Caption មិនបាន:\n\n" + error[-5000:]
+        )
+
+    return output_path
+
+# ============================================================
+# AUDIO EXTRACTION
+# ============================================================
+
+def extract_audio(video_path, output_wav):
     try:
         import av
 
         container = av.open(video_path)
-        stream = next((s for s in container.streams if s.type == "audio"), None)
+        stream = next(
+            (s for s in container.streams if s.type == "audio"),
+            None,
+        )
         if stream is None:
-            container.close()
-            raise RuntimeError("វីដេអូនេះមិនមាន Audio stream ទេ។")
+            raise RuntimeError("រកមិនឃើញ Audio ក្នុងវីដេអូ")
 
-        resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
-        with wave.open(audio_path, "wb") as wav:
+        resampler = av.audio.resampler.AudioResampler(
+            format="s16",
+            layout="mono",
+            rate=16000,
+        )
+
+        pcm = bytearray()
+        for frame in container.decode(stream):
+            frames = resampler.resample(frame)
+            if not isinstance(frames, list):
+                frames = [frames]
+            for converted in frames:
+                for plane in converted.planes:
+                    pcm.extend(plane.to_bytes())
+
+        container.close()
+
+        if not pcm:
+            raise RuntimeError("Audio ទទេ")
+
+        with wave.open(output_wav, "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(16000)
-            for frame in container.decode(stream):
-                for out in resampler.resample(frame):
-                    wav.writeframes(out.to_ndarray().tobytes())
-        container.close()
-        if os.path.getsize(audio_path) >= 1000:
-            return
-    except Exception as exc:
-        av_error = exc
-        if os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except OSError:
-                pass
+            wav.writeframes(bytes(pcm))
 
-    try:
-        ffmpeg([
-            "-y", "-i", video_path, "-map", "0:a:0?", "-vn",
-            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", audio_path,
-        ])
-    except Exception as exc:
-        raise RuntimeError(
-            "❌ មិនអាចអាន Audio ពីវីដេអូបានទេ។\n\n"
-            f"PyAV: {str(av_error)[-1000:]}\n\nFFmpeg: {str(exc)[-1800:]}"
-        ) from exc
+        return output_wav
 
+    except Exception:
+        command = [
+            ffmpeg(),
+            "-y",
+            "-i", video_path,
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-f", "wav",
+            output_wav,
+        ]
 
-# ------------------------- Gemini voice -------------------------
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
 
-def gemini_tts(text, output_path):
-    response = get_gemini_client().models.generate_content(
-        model="gemini-3.1-flash-tts-preview",
-        contents=text,
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
-                )
+        if result.returncode != 0:
+            error = result.stderr.decode("utf-8", errors="ignore")
+            raise RuntimeError(
+                "មិនអាច Extract Audio បាន:\n\n" + error[-4000:]
+            )
+
+        return output_wav
+
+# ============================================================
+# GEMINI TTS — EXISTING FEATURE
+# ============================================================
+
+def gemini_tts(client, text, output_wav):
+    response = retry_gemini(
+        lambda: client.models.generate_content(
+            model=TTS_MODEL,
+            contents=text,
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=TTS_VOICE
+                        )
+                    )
+                ),
             ),
         ),
+        attempts=2,
+        delay=4,
     )
-    try:
-        data = response.candidates[0].content.parts[0].inline_data.data
-        if isinstance(data, str):
-            data = base64.b64decode(data)
-        with wave.open(output_path, "wb") as wav:
+
+    audio = get_value(response, "audio", None)
+
+    if audio is None:
+        candidates = get_value(response, "candidates", [])
+        for candidate in candidates or []:
+            content = get_value(candidate, "content", None)
+            for part in get_value(content, "parts", []) or []:
+                inline = get_value(part, "inline_data", None)
+                if inline:
+                    audio = inline
+                    break
+            if audio:
+                break
+
+    if audio is None:
+        raise RuntimeError("Gemini មិនបានបញ្ជូនសំឡេងត្រឡប់មកវិញ")
+
+    data = get_value(audio, "data", None)
+    if isinstance(data, str):
+        data = base64.b64decode(data)
+    if not data:
+        raise RuntimeError("ទិន្នន័យ TTS ទទេ")
+
+    mime = get_value(audio, "mime_type", "") or ""
+
+    if "wav" not in mime.lower():
+        with wave.open(output_wav, "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(24000)
             wav.writeframes(data)
-    except (AttributeError, IndexError, TypeError) as exc:
-        raise RuntimeError("❌ Gemini មិនបានផ្ញើ Audio មកទេ។ សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។") from exc
+    else:
+        with open(output_wav, "wb") as f:
+            f.write(data)
 
+    return output_wav
 
-# ------------------------- Web video downloader -------------------------
+# ============================================================
+# DOWNLOAD VIDEO — EXISTING FEATURE
+# ============================================================
+
+MEDIA_RE = re.compile(
+    r'https?://[^\s"\']+\.(?:mp4|m3u8)(?:\?[^\s"\']*)?',
+    re.IGNORECASE,
+)
+
 
 def find_media_urls(html):
-    from html import unescape
-
-    text = unescape(html).replace(r"\\/", "/").replace(r"\/", "/")
-    text = text.replace(r"\u0026", "&").replace(r"\u003A", ":")
-    patterns = [
-        r'https?://[^"\'\s<>]+?\.m3u8(?:\?[^"\'\s<>]*)?',
-        r'https?://[^"\'\s<>]+?\.mp4(?:\?[^"\'\s<>]*)?',
-        r'(?:(?:https?:)?//)[^"\'\s<>]+?\.m3u8(?:\?[^"\'\s<>]*)?',
-        r'(?:(?:https?:)?//)[^"\'\s<>]+?\.mp4(?:\?[^"\'\s<>]*)?',
-    ]
-    found = []
-    for pattern in patterns:
-        for url in re.findall(pattern, text, flags=re.I):
-            if url.startswith("//"):
-                url = "https:" + url
-            url = url.rstrip("\\'\".,);]")
-            if url not in found:
-                found.append(url)
-    return found
+    return list(dict.fromkeys(MEDIA_RE.findall(html)))
 
 
-def download_media_url(media_url, output_path, referer=None):
-    headers = f"User-Agent: {USER_AGENT}\r\n"
-    if referer:
-        headers += f"Referer: {referer}\r\n"
-    ffmpeg([
-        "-y", "-headers", headers, "-i", media_url,
-        "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy",
-        "-movflags", "+faststart", output_path,
-    ])
+def download_media_url(url, output_path):
+    urllib.request.urlretrieve(url, output_path)
+    return output_path
 
 
-def page_media_download(url, output_path):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
-    with urllib.request.urlopen(req, timeout=30) as response:
+def page_media_download(page_url, output_path):
+    request = urllib.request.Request(
+        page_url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Android 10; Mobile) "
+                "AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            )
+        },
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
         html = response.read().decode("utf-8", errors="ignore")
 
-    urls = find_media_urls(html)
-    if not urls:
-        raise RuntimeError("ទំព័រនេះមិនបង្ហាញ MP4/M3U8 ជាសាធារណៈទេ។ អាចជាវីដេអូការពារ/DRM ឬបង្កើត URL តាម JavaScript។")
-
-    last_error = None
-    for media_url in urls[:10]:
+    for url in find_media_urls(html):
         try:
-            download_media_url(media_url, output_path, url)
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                return os.path.getsize(output_path)
-        except Exception as exc:
-            last_error = exc
-            if os.path.exists(output_path):
-                try:
-                    os.remove(output_path)
-                except OSError:
-                    pass
-    raise RuntimeError("រកឃើញ Video URL ប៉ុន្តែ Download មិនបាន។ " + str(last_error or ""))
+            return download_media_url(url, output_path)
+        except Exception:
+            continue
+
+    raise RuntimeError("រកមិនឃើញ MP4/M3U8 សាធារណៈក្នុងទំព័រនេះ")
 
 
-def webpage_download(url, output_path):
-    """Page URL -> yt-dlp first, then public MP4/M3U8 fallback."""
-    url = url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise RuntimeError("❌ URL មិនត្រឹមត្រូវ។")
-
-    first_error = None
+def webpage_download(page_url, output_path):
     try:
         import yt_dlp
 
-        template = output_path.rsplit(".", 1)[0] + ".%(ext)s"
         options = {
-            "format": "bv*+ba/b",
-            "outtmpl": template,
+            "outtmpl": output_path,
+            "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
-            "retries": 2,
-            "fragment_retries": 2,
-            "socket_timeout": 30,
-            "http_headers": {"User-Agent": USER_AGENT, "Referer": url},
         }
+
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=True)
-            if info and info.get("_type") == "playlist":
-                info = next((x for x in (info.get("entries") or []) if x), info)
-            prepared = ydl.prepare_filename(info)
+            ydl.download([page_url])
 
-        candidates = [
-            output_path,
-            os.path.splitext(prepared)[0] + ".mp4",
-            prepared,
-        ]
-        folder = os.path.dirname(output_path)
-        candidates += [
-            os.path.join(folder, name)
-            for name in os.listdir(folder)
-            if name.lower().endswith((".mp4", ".webm", ".mkv", ".mov"))
-        ]
-        existing = [p for p in candidates if os.path.exists(p) and os.path.getsize(p) > 1000]
-        if existing:
-            found = max(existing, key=os.path.getmtime)
-            if found != output_path:
-                os.replace(found, output_path)
-            return os.path.getsize(output_path)
-    except Exception as exc:
-        first_error = exc
+        if os.path.isfile(output_path):
+            return output_path
+    except Exception:
+        pass
 
-    try:
-        return page_media_download(url, output_path)
-    except Exception as exc:
-        raise RuntimeError(
-            "❌ មិនអាចរក/Download វីដេអូពី Link នេះបានទេ។\n\n" + str(exc)[-1800:]
-        ) from (first_error or exc)
+    return page_media_download(page_url, output_path)
 
+# ============================================================
+# UI — DOWNLOAD VIDEO
+# ============================================================
 
-# ------------------------- UI -------------------------
+with st.expander("⬇️ Download Video"):
+    page_url = st.text_input(
+        "ដាក់ Page / Video URL",
+        placeholder="https://...",
+    )
 
-st.title("🇰🇭 Smey Auto Caption")
-st.caption("🎙️ Auto Caption → 🇰🇭 Khmer → MP4")
-st.link_button("📱 ទាក់ទងម្ចាស់តាម Telegram", TELEGRAM_URL, use_container_width=True)
-
-with st.expander("🎬 Download Video", expanded=False):
-    st.caption("ដាក់ Link ទំព័រវីដេអូ ដូចជា FlickReels ហើយចុច Download។")
-    video_url = st.text_input("🔗 Video URL", placeholder="https://www.flickreels.net/playlist/...")
-
-    if st.button("⬇️ Download Video", use_container_width=True):
-        if not video_url.strip():
-            st.warning("សូមដាក់ Video URL ជាមុន។")
+    if st.button("⬇️ Download"):
+        if not page_url.strip():
+            st.warning("សូមដាក់ Link ជាមុន")
         else:
             try:
-                with tempfile.TemporaryDirectory() as tmp:
-                    output = os.path.join(tmp, "video.mp4")
-                    with st.spinner("⬇️ កំពុងរក និង Download វីដេអូ..."):
-                        size = webpage_download(video_url, output)
-                    data = open(output, "rb").read()
-                    st.success(f"✅ Download រួច — {size / 1024 / 1024:.1f} MB")
-                    st.video(data)
-                    st.download_button("⬇️ ទាញយក MP4", data, "smey_video.mp4", "video/mp4", use_container_width=True)
-            except Exception as exc:
-                st.error("❌ Download មិនបាន")
-                st.warning(str(exc))
+                with st.spinner("កំពុង Download..."):
+                    output = tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=".mp4",
+                    )
+                    output.close()
+                    webpage_download(page_url.strip(), output.name)
 
-st.subheader("🗣️ អក្សរ → សំឡេង Gemini")
-tts_text = st.text_area("✍️ សរសេរអត្ថបទ", placeholder="សរសេរអត្ថបទខ្មែរនៅទីនេះ...", height=100, key="tts_text")
-if st.button("🔊 បង្កើតសំឡេង Gemini", use_container_width=True):
-    if not tts_text.strip():
-        st.warning("សូមសរសេរអត្ថបទជាមុន។")
-    else:
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "gemini_tts.wav")
-                with st.spinner("🔊 កំពុងបង្កើតសំឡេង..."):
-                    gemini_tts(tts_text.strip(), path)
-                data = open(path, "rb").read()
-                st.audio(data, format="audio/wav")
-                st.download_button("⬇️ ទាញយកសំឡេង", data, "gemini_tts.wav", "audio/wav", use_container_width=True)
-        except Exception as exc:
-            st.error("❌ បង្កើតសំឡេងមិនបាន")
-            st.warning(str(exc))
+                with open(output.name, "rb") as f:
+                    st.download_button(
+                        "📥 Save Video",
+                        f,
+                        file_name="download.mp4",
+                        mime="video/mp4",
+                    )
+                st.success("Download រួចរាល់")
+            except Exception as e:
+                st.error(str(e))
 
-source = st.selectbox("🌐 ភាសាដើមក្នុងវីដេអូ", ["🤖 ស្វ័យប្រវត្តិ — ចិន / ខ្មែរ", "🇨🇳 中文", "🇰🇭 ខ្មែរ"], index=0)
-target = st.selectbox("🔄 បកប្រែទៅ", ["🇰🇭 ខ្មែរ", "🇨🇳 中文", "🚫 មិនបកប្រែ"], index=0)
-video = st.file_uploader("🎥 ជ្រើសវីដេអូ", type=["mp4", "mov", "mkv", "webm"])
+# ============================================================
+# UI — TEXT → GEMINI VOICE
+# ============================================================
 
-if video:
-    st.video(video)
-    if st.button("⚡ Auto Caption", use_container_width=True):
-        with tempfile.TemporaryDirectory() as tmp:
-            video_path = os.path.join(tmp, "input.mp4")
-            audio_path = os.path.join(tmp, "audio.wav")
-            ass_path = os.path.join(tmp, "caption.ass")
-            output_path = os.path.join(tmp, "output.mp4")
-            with open(video_path, "wb") as f:
-                f.write(video.getbuffer())
+with st.expander("🎙️ Text → Gemini Voice"):
+    api_key_tts = st.text_input(
+        "Gemini API Key",
+        type="password",
+        key="tts_api_key",
+    )
 
+    tts_text = st.text_area(
+        "បញ្ចូលអត្ថបទ",
+        height=120,
+        key="tts_text",
+    )
+
+    if st.button("🎙️ Generate Voice"):
+        if not api_key_tts:
+            st.warning("សូមដាក់ Gemini API Key")
+        elif not tts_text.strip():
+            st.warning("សូមបញ្ចូលអត្ថបទ")
+        else:
             try:
-                with st.spinner("🎵 កំពុងដកសំឡេង..."):
-                    extract_audio(video_path, audio_path)
+                client = get_gemini_client(api_key_tts)
+                output = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".wav",
+                )
+                output.close()
 
-                if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
-                    raise RuntimeError("❌ មិនអាចបង្កើត Audio file បានទេ។")
+                with st.spinner("កំពុងបង្កើតសំឡេង..."):
+                    gemini_tts(client, tts_text.strip(), output.name)
 
-                with st.spinner("🎙️ Gemini កំពុងស្តាប់សំឡេង..."):
-                    words = transcribe(audio_path, source)
+                with open(output.name, "rb") as f:
+                    audio_bytes = f.read()
+                st.audio(audio_bytes, format="audio/wav")
 
-                groups = make_groups(words)
-                detected = detect_language(words) if source.startswith("🤖") else source
-                st.info(f"🌐 ភាសាដែលរកឃើញ: {detected}")
+                with open(output.name, "rb") as f:
+                    st.download_button(
+                        "📥 Download Voice",
+                        f,
+                        file_name="gemini_voice.wav",
+                        mime="audio/wav",
+                    )
+            except Exception as e:
+                st.error(str(e))
 
-                if detected in {"🇨🇳 中文", "🇰🇭 ខ្មែរ"}:
-                    with st.spinner("🔄 កំពុងរៀបចំ Caption..."):
-                        groups = translate_groups(groups, detected, target)
+# ============================================================
+# UI — AUTO CAPTION
+# ============================================================
 
-                st.subheader("📝 Caption")
-                for group in groups:
-                    st.write(f"**{ass_time(group['start'])} → {ass_time(group['end'])}**  {group['text']}")
+st.divider()
+st.subheader("🎬 Auto Caption")
 
-                make_ass(groups, ass_path)
-                with st.spinner("🎬 កំពុងដាក់ Caption លើវីដេអូ..."):
-                    burn(video_path, ass_path, output_path)
+api_key = st.text_input(
+    "Gemini API Key",
+    type="password",
+    key="caption_api_key",
+)
 
-                result = open(output_path, "rb").read()
-                st.success("✅ វីដេអូរួចរាល់!")
-                st.video(result)
-                st.download_button("⬇️ ទាញយក MP4", result, "smey_auto_caption.mp4", "video/mp4", use_container_width=True)
-            except Exception as exc:
-                st.error("❌ Auto Caption មិនបាន")
-                st.warning(str(exc))
-                
+source_language = st.selectbox(
+    "ភាសាសំឡេងដើម",
+    ["Auto", "Chinese", "Khmer"],
+)
+
+target_language = st.selectbox(
+    "ភាសា Caption",
+    ["Khmer", "Chinese", "No translation"],
+)
+
+uploaded_video = st.file_uploader(
+    "📤 Upload Video",
+    type=["mp4", "mov", "mkv", "webm", "avi"],
+)
+
+if uploaded_video:
+    st.video(uploaded_video)
+
+if st.button("🚀 Auto Caption", type="primary"):
+    if not api_key:
+        st.warning("សូមដាក់ Gemini API Key")
+        st.stop()
+
+    if not uploaded_video:
+        st.warning("សូម Upload Video ជាមុន")
+        st.stop()
+
+    client = get_gemini_client(api_key)
+    temp_dir = tempfile.mkdtemp()
+
+    input_video = os.path.join(temp_dir, "input.mp4")
+    audio_path = os.path.join(temp_dir, "audio.wav")
+    ass_path = os.path.join(temp_dir, "captions.ass")
+    output_video = os.path.join(temp_dir, "Smey_Auto_Caption.mp4")
+
+    try:
+        with open(input_video, "wb") as f:
+            f.write(uploaded_video.getbuffer())
+
+        with st.status(
+            "កំពុងដំណើរការ Auto Caption...",
+            expanded=True,
+        ) as status:
+            st.write("🎧 1/5 កំពុងយកសំឡេងពីវីដេអូ...")
+            extract_audio(input_video, audio_path)
+
+            st.write("📝 2/5 កំពុងស្តាប់ និងកំណត់ Word Timing...")
+            transcription = transcribe(
+                client,
+                audio_path,
+                source_language if source_language != "Auto" else None,
+            )
+
+            words = words_from(transcription)
+            if not words:
+                raise RuntimeError(
+                    "Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។"
+                )
+
+            groups = make_groups(words)
+            full_text = " ".join(item["text"] for item in groups)
+            detected = detect_language(full_text)
+            st.write(f"🌐 ភាសាដែលបានរកឃើញ: **{detected}**")
+
+            st.write("🔄 3/5 កំពុងបកប្រែ Caption...")
+            final_groups = translate_groups(
+                client,
+                groups,
+                target_language,
+            )
+
+            st.write("🎞️ 4/5 កំពុងបង្កើត Caption...")
+            make_ass(final_groups, ass_path)
+
+            st.write("🔥 5/5 កំពុងបញ្ចូល Caption ទៅក្នុង MP4...")
+            burn(input_video, ass_path, output_video)
+
+            status.update(
+                label="✅ Auto Caption រួចរាល់!",
+                state="complete",
+            )
+
+        st.success(f"រកឃើញ {len(final_groups)} Caption")
+
+        st.subheader("📝 Caption Preview")
+        for item in final_groups:
+            st.write(
+                f"`{ass_time(item['start'])} → {ass_time(item['end'])}`  "
+                f"{item['text']}"
+            )
+
+        st.subheader("🎬 Result")
+        st.video(output_video)
+
+        with open(output_video, "rb") as f:
+            st.download_button(
+                "📥 Download MP4",
+                f,
+                file_name="Smey_Auto_Caption.mp4",
+                mime="video/mp4",
+            )
+
+    except Exception as e:
+        st.error("❌ Auto Caption មានបញ្ហា")
+        st.exception(e)
