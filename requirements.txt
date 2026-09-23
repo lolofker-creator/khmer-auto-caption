@@ -2,3 +2,4 @@ streamlit
 google-genai
 imageio-ffmpeg
 yt-dlp
+av
