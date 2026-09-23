@@ -280,42 +280,6 @@ st.link_button(
     use_container_width=True,
 )
 
-# ---------- Sovann Voice Test ----------
-st.subheader("🎧 សាកសំឡេង Gemini")
-st.caption("វាយប្រយោគខ្មែរខ្លីៗ រួចចុចប៊ូតុង ដើម្បីស្តាប់សំឡេងមុនយកទៅ Dubbing។")
-test_text = st.text_area(
-    "📝 អត្ថបទសម្រាប់សាក",
-    value="សួស្តីបងប្អូន! ថ្ងៃនេះយើងមកសាកសំឡេង Gemini។",
-    height=90,
-    max_chars=1200,
-)
-
-if st.button("🔊 សាកសំឡេង Gemini", use_container_width=True):
-    if not test_text.strip():
-        st.warning("⚠️ សូមបញ្ចូលអត្ថបទសិន។")
-    else:
-        try:
-            with tempfile.TemporaryDirectory() as test_tmp:
-                test_wav = os.path.join(test_tmp, "sovann_test.wav")
-                with st.spinner("🎙️ កំពុងបង្កើតសំឡេង Sovann..."):
-                    doslarb_tts(test_text.strip(), test_wav)
-                audio_data = open(test_wav, "rb").read()
-                st.success("✅ បានបង្កើតសំឡេងរួចរាល់!")
-                st.audio(audio_data, format="audio/wav")
-                st.download_button(
-                    "⬇️ ទាញយកសំឡេង Sovann",
-                    data=audio_data,
-                    file_name="sovann_test.wav",
-                    mime="audio/wav",
-                    use_container_width=True,
-                )
-        except Exception as e:
-            if "429" in str(e):
-                st.error("❌ Doslarb API Request អស់ហើយ (120/120)។ ត្រូវរង់ចាំ quota reset ឬប្តូរ plan មុនសាកសំឡេង។")
-            else:
-                st.error("❌ សាកសំឡេងមិនបាន")
-                st.exception(e)
-
 source = st.selectbox(
     "🌐 ភាសាដើម",
     ["🇨🇳 中文", "🇰🇭 ខ្មែរ", "🇬🇧 English"],
@@ -452,4 +416,4 @@ if video:
             except Exception as e:
                 st.error("❌ មានបញ្ហា")
                 st.exception(e)
-                    
+
