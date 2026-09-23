@@ -334,9 +334,10 @@ with st.expander('⬇️ Download Video'):
                     output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                     output.close()
                     webpage_download(page_url.strip(), output.name)
+                st.success('✅ Download រួចរាល់')
+                st.video(output.name)
                 with open(output.name, 'rb') as f:
-                    st.download_button('📥 Save Video', f, file_name='download.mp4', mime='video/mp4')
-                st.success('Download រួចរាល់')
+                    st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
             except Exception as e:
                 st.error(str(e))
 with st.expander('🎙️ Text → Free Voice'):
