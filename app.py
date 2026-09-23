@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import subprocess
 import tempfile
 
@@ -20,34 +21,71 @@ st.set_page_config(
 )
 
 st.title("🇰🇭 Smey Auto Caption")
-st.write("🎙️ Gemini → Caption ខ្មែរ → MP4")
-st.info("Gemini 3.5 Transcribe")
+st.write("🎙️ ស្តាប់ → បកប្រែ → Caption ខ្មែរ → MP4")
 
 
 # =========================================================
 # API KEY
 # =========================================================
 
-api_key = st.text_input(
-    "🔑 Gemini API Key",
-    type="password",
-    placeholder="បញ្ចូល Gemini API Key"
-)
+api_key = ""
+
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    pass
 
 if not api_key:
-    st.warning(
-        "សូមបញ្ចូល Gemini API Key មុន"
+
+    api_key = st.text_input(
+        "🔑 Gemini API Key",
+        type="password"
     )
+
+if not api_key:
+
+    st.warning(
+        "សូមដាក់ Gemini API Key"
+    )
+
     st.stop()
 
-
-# =========================================================
-# GEMINI
-# =========================================================
 
 client = genai.Client(
     api_key=api_key
 )
+
+
+# =========================================================
+# SOURCE LANGUAGE
+# =========================================================
+
+source_language = st.selectbox(
+    "🌐 ភាសាដើម",
+    [
+        "ចិន",
+        "អង់គ្លេស",
+        "ជប៉ុន",
+        "កូរ៉េ",
+        "វៀតណាម",
+        "ថៃ",
+        "ខ្មែរ",
+        "ស្វ័យប្រវត្តិ"
+    ],
+    index=0
+)
+
+
+language_map = {
+    "ចិន": "zh-CN",
+    "អង់គ្លេស": "en-US",
+    "ជប៉ុន": "ja-JP",
+    "កូរ៉េ": "ko-KR",
+    "វៀតណាម": "vi-VN",
+    "ថៃ": "th-TH",
+    "ខ្មែរ": "km-KH",
+    "ស្វ័យប្រវត្តិ": ""
+}
 
 
 # =========================================================
@@ -96,7 +134,7 @@ def extract_audio(
 
 
 # =========================================================
-# TEXT CLEAN
+# TEXT
 # =========================================================
 
 def clean_text(text):
@@ -133,23 +171,18 @@ def seconds_from_offset(value):
 
     value = str(value).strip()
 
-    # Google returns values such as:
-    # 0.100s
-    # 1.250s
-
     if value.endswith("s"):
 
         try:
             return float(
                 value[:-1]
             )
-        except:
+        except Exception:
             return None
 
     try:
         return float(value)
-
-    except:
+    except Exception:
         return None
 
 
@@ -185,21 +218,23 @@ def ass_time(seconds):
 
 
 # =========================================================
-# GET WORD TIMESTAMPS FROM GEMINI
+# GEMINI WORD TIMESTAMPS
 # =========================================================
 
 def get_words(response):
 
     words = []
 
-    for candidate in (
+    candidates = (
         getattr(
             response,
             "candidates",
             []
         )
         or []
-    ):
+    )
+
+    for candidate in candidates:
 
         content = getattr(
             candidate,
@@ -210,11 +245,14 @@ def get_words(response):
         if content is None:
             continue
 
-        parts = getattr(
-            content,
-            "parts",
-            []
-        ) or []
+        parts = (
+            getattr(
+                content,
+                "parts",
+                []
+            )
+            or []
+        )
 
         for part in parts:
 
@@ -227,17 +265,20 @@ def get_words(response):
             if not transcription:
                 continue
 
-            word_list = getattr(
-                transcription,
-                "words",
-                []
-            ) or []
+            word_list = (
+                getattr(
+                    transcription,
+                    "words",
+                    []
+                )
+                or []
+            )
 
-            for word_info in word_list:
+            for info in word_list:
 
                 word = clean_text(
                     getattr(
-                        word_info,
+                        info,
                         "word",
                         ""
                     )
@@ -245,7 +286,7 @@ def get_words(response):
 
                 start = seconds_from_offset(
                     getattr(
-                        word_info,
+                        info,
                         "start_offset",
                         None
                     )
@@ -253,7 +294,7 @@ def get_words(response):
 
                 end = seconds_from_offset(
                     getattr(
-                        word_info,
+                        info,
                         "end_offset",
                         None
                     )
@@ -285,17 +326,12 @@ def get_words(response):
 
 
 # =========================================================
-# GROUP WORDS INTO NATURAL CAPTIONS
-#
-# មិនបង្ហាញពាក្យមួយៗ
-# ក៏មិនបង្ហាញប្រយោគទាំងអស់តាំងពីដើម
-#
-# Caption នឹងតាមការនិយាយ
+# MAKE CAPTION SEGMENTS
 # =========================================================
 
-def make_captions(words):
+def make_segments(words):
 
-    captions = []
+    segments = []
 
     current = []
 
@@ -304,12 +340,12 @@ def make_captions(words):
 
     for item in words:
 
-        word = item["word"]
-
         if start is None:
             start = item["start"]
 
-        current.append(word)
+        current.append(
+            item["word"]
+        )
 
         end = item["end"]
 
@@ -319,34 +355,32 @@ def make_captions(words):
 
         duration = end - start
 
-        should_finish = False
+        finish = False
 
-        # Caption មិនវែងពេក
-        if len(text) >= 32:
-            should_finish = True
+        if len(text) >= 35:
+            finish = True
 
-        # ប្រហែល 2.2 វិនាទី
-        if duration >= 2.2:
-            should_finish = True
+        if duration >= 2.5:
+            finish = True
 
-        # ចប់ប្រយោគ
         if text.endswith(
             (
-                "។",
+                "。",
                 "?",
                 "!",
                 "…",
                 ":"
             )
         ):
-            should_finish = True
+            finish = True
 
-        if should_finish:
+        if finish:
 
-            captions.append({
+            segments.append({
+                "id": len(segments) + 1,
                 "start": start,
                 "end": end,
-                "text": text
+                "source": text
             })
 
             current = []
@@ -359,15 +393,134 @@ def make_captions(words):
             " ".join(current)
         )
 
-        if text:
+        segments.append({
+            "id": len(segments) + 1,
+            "start": start,
+            "end": end,
+            "source": text
+        })
 
-            captions.append({
-                "start": start,
-                "end": end,
-                "text": text
-            })
+    return segments
 
-    return captions
+
+# =========================================================
+# TRANSLATE ALL CAPTIONS IN ONE REQUEST
+# =========================================================
+
+def translate_captions(
+    segments,
+    source_name
+):
+
+    payload = []
+
+    for item in segments:
+
+        payload.append({
+            "id": item["id"],
+            "text": item["source"]
+        })
+
+    prompt = f"""
+អ្នកគឺជាអ្នកបកប្រែ Subtitle អាជីព។
+
+ភាសាដើម៖ {source_name}
+ភាសាគោលដៅ៖ ភាសាខ្មែរ
+
+បកប្រែ Caption ទាំងអស់ខាងក្រោមទៅជាភាសាខ្មែរ។
+
+ច្បាប់សំខាន់ៗ៖
+1. រក្សា id ដដែល។
+2. កុំប្តូរ ឬលុប id។
+3. បកប្រែឲ្យមានន័យធម្មជាតិជាភាសាខ្មែរ។
+4. កុំសង្ខេប។
+5. កុំបន្ថែមការពន្យល់។
+6. បើអត្ថបទដើមជាខ្មែរ សូមរក្សាជាខ្មែរ។
+7. Output ត្រូវជា JSON array ប៉ុណ្ណោះ។
+
+Caption:
+{json.dumps(
+    payload,
+    ensure_ascii=False
+)}
+"""
+
+    schema = {
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {
+                "id": {
+                    "type": "INTEGER"
+                },
+                "text": {
+                    "type": "STRING"
+                }
+            },
+            "required": [
+                "id",
+                "text"
+            ]
+        }
+    }
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=0.2
+        )
+    )
+
+    raw = getattr(
+        response,
+        "text",
+        ""
+    )
+
+    if not raw:
+        raise RuntimeError(
+            "Gemini មិនបានបញ្ជូនការបកប្រែមកទេ។"
+        )
+
+    translated = json.loads(
+        raw
+    )
+
+    translation_map = {}
+
+    for item in translated:
+
+        item_id = int(
+            item["id"]
+        )
+
+        translation_map[item_id] = (
+            clean_text(
+                item["text"]
+            )
+        )
+
+    result = []
+
+    for segment in segments:
+
+        translated_text = (
+            translation_map.get(
+                segment["id"],
+                segment["source"]
+            )
+        )
+
+        result.append({
+            "start": segment["start"],
+            "end": segment["end"],
+            "text": translated_text
+        })
+
+    return result
 
 
 # =========================================================
@@ -419,13 +572,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             f.write(
                 "Dialogue: 0,"
-                + ass_time(
-                    item["start"]
-                )
+                + ass_time(item["start"])
                 + ","
-                + ass_time(
-                    item["end"]
-                )
+                + ass_time(item["end"])
                 + ",Khmer,,0,0,0,,"
                 + text
                 + "\n"
@@ -444,18 +593,9 @@ def burn_caption(
 
     filter_path = (
         ass_path
-        .replace(
-            "\\",
-            "/"
-        )
-        .replace(
-            ":",
-            r"\:"
-        )
-        .replace(
-            "'",
-            r"\'"
-        )
+        .replace("\\", "/")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
     )
 
     run_ffmpeg([
@@ -504,7 +644,7 @@ if video:
     st.video(video)
 
     if st.button(
-        "⚡ បង្កើត Caption ខ្មែរ",
+        "⚡ បកប្រែ + បង្កើត Caption ខ្មែរ",
         use_container_width=True
     ):
 
@@ -555,7 +695,7 @@ if video:
                     )
 
                 # ---------------------------------------------
-                # 2. Upload audio to Gemini
+                # 2. Upload audio
                 # ---------------------------------------------
 
                 with st.spinner(
@@ -567,23 +707,41 @@ if video:
                     )
 
                 # ---------------------------------------------
-                # 3. Gemini transcription
+                # 3. Transcribe
                 # ---------------------------------------------
 
                 with st.spinner(
-                    "🧠 Gemini កំពុងស្តាប់សំឡេងខ្មែរ..."
+                    "🎙️ Gemini កំពុងស្តាប់សំឡេង..."
                 ):
 
-                    response = client.models.generate_content(
-                        model="gemini-3.5-transcribe",
-                        contents=[
-                            audio_file
-                        ],
-                        config=types.GenerateContentConfig(
-                            audio_transcription_config=(
-                                types.AudioTranscriptionConfig(
-                                    language_codes=["km-KH"],
-                                    word_timestamp=True
+                    language_code = (
+                        language_map[
+                            source_language
+                        ]
+                    )
+
+                    config_args = {
+                        "word_timestamp": True
+                    }
+
+                    if language_code:
+                        config_args[
+                            "language_codes"
+                        ] = [
+                            language_code
+                        ]
+
+                    response = (
+                        client.models.generate_content(
+                            model="gemini-3.5-transcribe",
+                            contents=[
+                                audio_file
+                            ],
+                            config=types.GenerateContentConfig(
+                                audio_transcription_config=(
+                                    types.AudioTranscriptionConfig(
+                                        **config_args
+                                    )
                                 )
                             )
                         )
@@ -600,63 +758,67 @@ if video:
                 if not words:
 
                     st.error(
-                        "❌ Gemini មិនបានបញ្ជូន Word Timing មកទេ។"
+                        "❌ Gemini មិនបានផ្តល់ Timing មកទេ។"
                     )
-
-                    # បង្ហាញ transcript ដើម្បីពិនិត្យ
-                    transcript = getattr(
-                        response,
-                        "text",
-                        ""
-                    )
-
-                    if transcript:
-
-                        st.write(
-                            "Transcript:"
-                        )
-
-                        st.write(
-                            transcript
-                        )
 
                     st.stop()
 
                 # ---------------------------------------------
-                # 5. Natural captions
+                # 5. Make source captions
                 # ---------------------------------------------
 
                 with st.spinner(
-                    "📝 កំពុងរៀបចំ Caption តាមការនិយាយ..."
+                    "📝 កំពុងរៀបចំ Caption ដើម..."
                 ):
 
-                    captions = make_captions(
-                        words
+                    source_segments = (
+                        make_segments(
+                            words
+                        )
                     )
 
-                if not captions:
+                if not source_segments:
 
                     st.error(
-                        "❌ មិនមាន Caption"
+                        "❌ រកមិនឃើញ Caption"
                     )
 
                     st.stop()
 
                 # ---------------------------------------------
-                # 6. ASS
-                # ---------------------------------------------
-
-                create_ass(
-                    captions,
-                    ass_path
-                )
-
-                # ---------------------------------------------
-                # 7. Burn
+                # 6. Translate
                 # ---------------------------------------------
 
                 with st.spinner(
-                    "🎬 កំពុងបង្កើត MP4..."
+                    "🇰🇭 Gemini កំពុងបកប្រែ Caption ជាខ្មែរ..."
+                ):
+
+                    khmer_captions = (
+                        translate_captions(
+                            source_segments,
+                            source_language
+                        )
+                    )
+
+                # ---------------------------------------------
+                # 7. Create ASS
+                # ---------------------------------------------
+
+                with st.spinner(
+                    "⏱️ កំពុងរក្សា Timing ដើម..."
+                ):
+
+                    create_ass(
+                        khmer_captions,
+                        ass_path
+                    )
+
+                # ---------------------------------------------
+                # 8. Burn
+                # ---------------------------------------------
+
+                with st.spinner(
+                    "🎬 កំពុងបញ្ចូល Caption ខ្មែរ..."
                 ):
 
                     burn_caption(
@@ -666,7 +828,7 @@ if video:
                     )
 
                 # ---------------------------------------------
-                # 8. Result
+                # 9. Result
                 # ---------------------------------------------
 
                 with open(
@@ -677,7 +839,7 @@ if video:
                     output_data = f.read()
 
                 st.success(
-                    "✅ រួចរាល់!"
+                    "✅ បកប្រែ + Caption រួចរាល់!"
                 )
 
                 st.video(
@@ -687,17 +849,17 @@ if video:
                 st.download_button(
                     "⬇️ ទាញយក MP4",
                     data=output_data,
-                    file_name="smey_auto_caption.mp4",
+                    file_name="smey_auto_caption_khmer.mp4",
                     mime="video/mp4",
                     use_container_width=True
                 )
 
-            except Exception as e:
+            except Exception as error:
 
                 st.error(
-                    "❌ Gemini មានបញ្ហា"
+                    "❌ App មានបញ្ហា"
                 )
 
                 st.code(
-                    str(e)
+                    str(error)
                 )
