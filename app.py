@@ -343,29 +343,11 @@ def webpage_download(page_url, output_path, cookies=None):
         pass
     return page_media_download(page_url, output_path)
 
-with st.expander('⬇️ Download Video'):
-    page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
-    cookies_file = st.file_uploader('🔐 Cookies (សម្រាប់ Private ដែលអ្នកមានសិទ្ធិចូល)', type=['txt'], key='download_cookies')
-    if st.button('⬇️ Download'):
-        if not page_url.strip():
-            st.warning('សូមដាក់ Link ជាមុន')
-        else:
-            try:
-                with st.spinner('កំពុង Download...'):
-                    cookie_path = None
-                    if cookies_file:
-                        cookie_path = os.path.join(tempfile.mkdtemp(), 'cookies.txt')
-                        with open(cookie_path, 'wb') as f:
-                            f.write(cookies_file.getvalue())
-                    output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                    output.close()
-                    webpage_download(page_url.strip(), output.name, cookie_path)
-                st.success('✅ រួចរាល់')
-                st.video(output.name)
-                with open(output.name, 'rb') as f:
-                    st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
-            except Exception:
-                st.error('មិនអាច Download បានទេ។ សម្រាប់ Private សូមប្រើ Cookies របស់គណនីដែលមានសិទ្ធិចូល។ DRM នៅតែមិនអាចរំលងបាន។')
+with st.expander('🌐 បើកវីដេអូក្នុង Tool'):
+    page_url = st.text_input('🔗 ដាក់ Link Website / Video', placeholder='https://...', key='web_video_url')
+    if page_url.strip():
+        st.markdown(f"<div style=\"position:relative;border-radius:12px;overflow:hidden;border:1px solid #444;\"><iframe src=\"{page_url.strip()}\" style=\"width:100%;height:650px;border:0;\" allow=\"autoplay; fullscreen; picture-in-picture\"></iframe><a href=\"{page_url.strip()}\" target=\"_blank\" style=\"position:absolute;right:14px;top:14px;background:#111;color:#fff;padding:10px 14px;border-radius:50%;font-size:22px;text-decoration:none;\">⬇️</a></div>", unsafe_allow_html=True)
+        st.caption('▶️ វេបសាយត្រូវបានបើកក្នុង Tool។ ប៊ូតុង ⬇️ បើក Link ដើម្បីទាញយក ប្រសិនបើវេបសាយផ្តល់ Download/Video URL។')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
