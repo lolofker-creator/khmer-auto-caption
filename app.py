@@ -185,29 +185,43 @@ def add_word(result, word, start=None, end=None):
 
 
 def words_from(response):
+    """Extract word timing from Gemini GenerateContent response.
+
+    Gemini returns AudioTranscription inside:
+    response.candidates[].content.parts[].audio_transcription
+    when word_timestamp=True.
+    """
     words = []
 
-    transcription = get_value(response, "audio_transcription", None)
-    if transcription is not None:
-        current_words = get_value(transcription, "words", None)
-        if current_words:
+    # Official GenerateContent response shape.
+    for candidate in get_value(response, "candidates", []) or []:
+        content = get_value(candidate, "content", None)
+        for part in get_value(content, "parts", []) or []:
+            transcription = get_value(part, "audio_transcription", None)
+            if transcription is None:
+                continue
+
+            current_words = get_value(transcription, "words", []) or []
             for word in current_words:
                 add_word(words, word)
+
+    # Keep compatibility with older/alternate SDK response shapes.
+    transcription = get_value(response, "audio_transcription", None)
+    if transcription is not None:
+        for word in get_value(transcription, "words", []) or []:
+            add_word(words, word)
 
     direct_words = get_value(response, "words", None)
     if direct_words:
         for word in direct_words:
             add_word(words, word)
 
+    # Legacy annotation shape.
     annotations = get_value(response, "annotations", None)
     if annotations:
         for item in annotations:
-            add_word(
-                words,
-                item,
-                get_value(item, "start_time", 0),
-                get_value(item, "end_time", 0),
-            )
+            if get_value(item, "type", "") == "word_info":
+                add_word(words, item)
 
     return words
 
@@ -708,7 +722,6 @@ with st.expander("🎙️ Text → Gemini Voice"):
                 )
                 output.close()
 
-                
                 with st.spinner("កំពុងបង្កើតសំឡេង..."):
                     gemini_tts(client, tts_text.strip(), output.name)
 
