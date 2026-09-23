@@ -11,13 +11,14 @@ import secrets
 
 from datetime import datetime, timezone
 
+import requests
+import streamlit as st
+
+
 st.set_page_config(
     page_title="Smey Auto Caption",
     page_icon="🇰🇭",
 )
-
-import requests
-import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
@@ -825,7 +826,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f.write(
                 f"Dialogue: 0,"
                 f"{ass_time(group['start'])},"
-                   f"{ass_time(group['end'])},"
+                    f"{ass_time(group['end'])},"
                 f"Khmer,,0,0,0,,"
                 f"{text}\n"
             )
