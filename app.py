@@ -284,14 +284,19 @@ MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)
 def find_media_urls(html):
     return list(dict.fromkeys(MEDIA_RE.findall(html)))
 
+def video_ok(path):
+    if not os.path.isfile(path) or os.path.getsize(path) < 10000:
+        return False
+    cmd = [ffmpeg(), '-v', 'error', '-i', path, '-map', '0:v:0', '-frames:v', '1', '-f', 'null', '-']
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
 def download_media_url(url, output_path):
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=60) as r, open(output_path, 'wb') as f:
-        while True:
-            chunk = r.read(1024 * 1024)
-            if not chunk:
-                break
+        while chunk := r.read(1024 * 1024):
             f.write(chunk)
+    if not video_ok(output_path):
+        raise RuntimeError('Link នេះមិនបានផ្ញើវីដេអូពិតទេ')
     return output_path
 
 def page_media_download(page_url, output_path):
@@ -299,21 +304,22 @@ def page_media_download(page_url, output_path):
     with urllib.request.urlopen(req, timeout=30) as r:
         html = r.read().decode('utf-8', errors='ignore')
     for url in find_media_urls(html):
+        if '.m3u8' in url.lower():
+            continue
         try:
             return download_media_url(url, output_path)
         except Exception:
             pass
-    raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
+    raise RuntimeError('រកមិនឃើញវីដេអូដែលអាចទាញយកបានក្នុង Link នេះ')
 
 def webpage_download(page_url, output_path):
-    # Direct video URL
-    if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', page_url, re.I):
+    # Direct normal video URL. HLS/M3U8 goes through yt-dlp.
+    if re.search(r'\.(?:mp4|webm|mov|mkv)(?:\?|$)', page_url, re.I):
         try:
             return download_media_url(page_url, output_path)
         except Exception:
             pass
 
-    # Supported sites
     try:
         import yt_dlp
         options = {
@@ -330,19 +336,18 @@ def webpage_download(page_url, output_path):
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([page_url])
-        if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+        if video_ok(output_path):
             return output_path
         base = os.path.splitext(output_path)[0]
         for ext in ('.mp4', '.webm', '.mkv'):
             candidate = base + ext
-            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            if video_ok(candidate):
                 if candidate != output_path:
                     os.replace(candidate, output_path)
                 return output_path
     except Exception:
         pass
 
-    # Public pages containing a media URL
     return page_media_download(page_url, output_path)
 
 with st.expander('⬇️ Download Video'):
