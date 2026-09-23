@@ -953,10 +953,10 @@ def burn_caption(
 source_language = st.selectbox(
     "🌐 ភាសាដើម",
     [
+        "🇨🇳 中文",
         "Auto Detect",
         "🇰🇭 ខ្មែរ",
         "🇬🇧 English",
-        "🇨🇳 中文",
         "🇻🇳 Tiếng Việt",
         "🇰🇷 한국어",
         "🇯🇵 日本語",
@@ -997,6 +997,7 @@ dubbing_language = st.selectbox(
         "🇰🇷 한국어",
         "🇯🇵 日本語",
     ],
+    index=0,
     disabled=not enable_dubbing,
 )
 
@@ -1010,10 +1011,16 @@ voice_label = st.selectbox(
 )
 
 if enable_dubbing:
-    st.info(
-        "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
-        "ហើយជំនួសសំឡេងដើម។"
-    )
+    if dubbing_language == "🇰🇭 ខ្មែរ":
+        st.info(
+            "🇨🇳➡️🇰🇭 រឿងចិន → បកប្រែជាខ្មែរ → សំឡេង AI ខ្មែរ។ "
+            "មិនចាំបាច់ជ្រើស 'បកប្រែទៅជា' ទៀតទេ។"
+        )
+    else:
+        st.info(
+            "AI Dubbing នឹងបង្កើតសំឡេងថ្មី "
+            "ហើយជំនួសសំឡេងដើម។"
+        )
 
     if dubbing_language == "🇰🇭 ខ្មែរ":
         st.caption(
@@ -1183,7 +1190,15 @@ if video is not None:
                 # Auto Translate
                 # ---------------------------------
 
-                if target_language != "មិនបកប្រែ":
+                # AI Dubbing អាចជ្រើសភាសារបស់វាដោយផ្ទាល់
+                # មិនបង្ខំឱ្យអ្នកជ្រើស "បកប្រែទៅជា" ទៀតទេ។
+                dubbing_target_language = (
+                    dubbing_language
+                    if dubbing_clicked and enable_dubbing
+                    else target_language
+                )
+
+                if dubbing_target_language != "មិនបកប្រែ":
                     with st.spinner(
                         "🌐 Gemini កំពុងបកប្រែ Caption..."
                     ):
@@ -1191,7 +1206,7 @@ if video is not None:
                             client,
                             groups,
                             source_language,
-                            target_language,
+                            dubbing_target_language,
                         )
 
 
@@ -1238,19 +1253,8 @@ if video is not None:
                         )
                         st.stop()
 
-                    if target_language == "មិនបកប្រែ":
-                        st.warning(
-                            "⚠️ សូមជ្រើសភាសានៅ "
-                            "'បកប្រែទៅជា' សម្រាប់ AI Dubbing។"
-                        )
-                        st.stop()
-
-                    if target_language != dubbing_language:
-                        st.warning(
-                            "⚠️ 'បកប្រែទៅជា' និង "
-                            "'ភាសាសំឡេង AI' ត្រូវជ្រើសភាសាដូចគ្នា។"
-                        )
-                        st.stop()
+                    # មិនចាំបាច់ឱ្យ "បកប្រែទៅជា" ត្រូវបានជ្រើសទៀតទេ។
+                    # AI Dubbing ប្រើ "ភាសាសំឡេង AI" ជាភាសាគោល។
 
                     with st.spinner(
                         "🎙️ កំពុងបង្កើតសំឡេង AI..."
