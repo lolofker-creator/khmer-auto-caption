@@ -5,6 +5,7 @@ import tempfile
 import wave
 import json
 import urllib.request
+import time
 import hashlib
 import hmac
 import secrets
@@ -416,7 +417,6 @@ def translate_captions(
         "🇰🇷 한국어": "Korean",
         "🇯🇵 日本語": "Japanese",
     }
-
     target_map = {
         "🇰🇭 ខ្មែរ": "Khmer",
         "🇬🇧 English": "English",
@@ -426,185 +426,103 @@ def translate_captions(
         "🇯🇵 日本語": "Japanese",
     }
 
-    source_name = source_map.get(
-        source_language,
-        "the original language",
-    )
-    target_name = target_map.get(
-        target_language,
-        "Khmer",
-    )
+    source_name = source_map.get(source_language, "the original language")
+    target_name = target_map.get(target_language, "Khmer")
 
-    # Translate in small batches. This prevents Gemini from dropping or
-    # merging captions when a long video contains many subtitle segments.
-    batch_size = 12
-    translated_all = []
+    # Keep Gemini requests comfortably below the Free-tier 15 requests/minute
+    # limit. One request handles several captions, so normal videos need only
+    # a small number of Gemini calls.
+    batch_size = 20
+    min_gap = 4.5
+    last_request_time = [0.0]
 
-    models_to_try = [
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-    ]
-
-    def translate_batch(texts):
+    def gemini_translate(texts):
         prompt = f"""
-Translate the following video captions.
+Translate these video captions from {source_name} to {target_name}.
 
-Source language:
-{source_name}
-
-Target language:
-{target_name}
-
-IMPORTANT RULES:
-1. Return exactly one translated string for every input caption.
-2. Keep the exact same order.
-3. Never merge two captions.
-4. Never split one caption into multiple captions.
-5. Do not add explanations or numbering.
-6. Keep names and numbers accurate.
-7. Translate naturally for subtitles.
-8. Return ONLY a JSON array of strings.
-
-There are exactly {len(texts)} input captions.
+Return EXACTLY {len(texts)} strings in one JSON array.
+Rules:
+- one output string for each input caption
+- same order
+- never merge or split captions
+- no numbering
+- no explanation
+- natural subtitle translation
 
 Captions:
 """
-        for i, caption_text in enumerate(texts, start=1):
+        for i, caption_text in enumerate(texts, 1):
             prompt += f"\n{i}. {caption_text}"
 
-        response = None
+        models = [
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+        ]
+
         last_error = None
+        for model_name in models:
+            for attempt in range(3):
+                wait = min_gap - (time.monotonic() - last_request_time[0])
+                if wait > 0:
+                    time.sleep(wait)
 
-        for model_name in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=list[str],
-                    ),
-                )
-                break
-            except Exception as e:
-                last_error = e
-                error_text = str(e)
-                if "503" in error_text or "UNAVAILABLE" in error_text:
-                    continue
-                raise
-
-        if response is None:
-            raise RuntimeError(
-                "❌ Gemini Translation មិនអាចដំណើរការបានឥឡូវនេះ។ "
-                "ម៉ូដែលបកប្រែទាំងអស់កំពុងមិនអាចប្រើបានជាបណ្តោះអាសន្ន។"
-            ) from last_error
-
-        translated = response.parsed
-
-        if not translated:
-            raise ValueError("Gemini មិនបានបញ្ជូនការបកប្រែមកទេ។")
-
-        translated = [str(x).strip() for x in translated]
-
-        # If Gemini still returns the wrong number, retry this small batch
-        # once with an even stricter prompt. If it still fails, translate
-        # each caption separately so the whole video does not stop.
-        if len(translated) != len(texts):
-            strict_prompt = f"""
-Translate each caption below from {source_name} to {target_name}.
-
-Return EXACTLY {len(texts)} strings in a JSON array.
-The output array must contain one string for each input line, in the same order.
-Do not merge, split, skip, number, or explain anything.
-
-INPUT:
-"""
-            for i, caption_text in enumerate(texts, start=1):
-                strict_prompt += f"\nCAPTION_{i}: {caption_text}"
-
-            for model_name in models_to_try:
                 try:
-                    retry_response = client.models.generate_content(
+                    response = client.models.generate_content(
                         model=model_name,
-                        contents=strict_prompt,
+                        contents=prompt,
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
                             response_schema=list[str],
                         ),
                     )
-                    retry_translated = retry_response.parsed
-                    if retry_translated:
-                        retry_translated = [
-                            str(x).strip()
-                            for x in retry_translated
-                        ]
-                        if len(retry_translated) == len(texts):
-                            return retry_translated
-                except Exception as e:
-                    error_text = str(e)
-                    if "503" in error_text or "UNAVAILABLE" in error_text:
-                        continue
-
-        # Final fallback: translate one caption at a time.
-        # This is slower, but guarantees the number/order stays correct.
-        result = []
-        for caption_text in texts:
-            single_prompt = f"""
-Translate this single video caption from {source_name} to {target_name}.
-Return ONLY one JSON string. Do not explain anything.
-
-Caption:
-{caption_text}
-"""
-            single_done = False
-            for model_name in models_to_try:
-                try:
-                    single_response = client.models.generate_content(
-                        model=model_name,
-                        contents=single_prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=str,
-                        ),
+                    last_request_time[0] = time.monotonic()
+                    translated = response.parsed
+                    if translated and len(translated) == len(texts):
+                        return [str(x).strip() for x in translated]
+                    last_error = ValueError(
+                        f"Gemini returned {len(translated or [])} captions; expected {len(texts)}."
                     )
-                    single_text = single_response.parsed
-                    if single_text is not None:
-                        result.append(str(single_text).strip())
-                        single_done = True
-                        break
+                    break
                 except Exception as e:
+                    last_request_time[0] = time.monotonic()
+                    last_error = e
                     error_text = str(e)
-                    if "503" in error_text or "UNAVAILABLE" in error_text:
+                    if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+                        # Gemini often tells us exactly how long to wait.
+                        delay = 16.0
+                        import re
+                        m = re.search(r"retry in ([0-9.]+)s", error_text, re.I)
+                        if m:
+                            delay = max(16.0, float(m.group(1)) + 1.0)
+                        time.sleep(delay)
                         continue
-            if not single_done:
-                # Keep the original caption rather than stopping the whole job.
-                result.append(str(caption_text).strip())
+                    if "503" in error_text or "UNAVAILABLE" in error_text:
+                        time.sleep(3.0)
+                        continue
+                    break
 
-        return result
+        # Last-resort: preserve original text instead of crashing the video.
+        if last_error:
+            raise RuntimeError(
+                "❌ Gemini Translation កំពុងដល់ rate limit/quota។ "
+                "សូមរង់ចាំបន្តិច ហើយសាកម្តងទៀត។"
+            ) from last_error
+        return texts
 
+    translated_all = []
     for start in range(0, len(groups), batch_size):
         batch_groups = groups[start:start + batch_size]
-        batch_texts = [
-            str(group["text"]).strip()
-            for group in batch_groups
-        ]
-        translated_all.extend(
-            translate_batch(batch_texts)
-        )
+        batch_texts = [str(g["text"]).strip() for g in batch_groups]
+        translated_all.extend(gemini_translate(batch_texts))
 
-    new_groups = []
-
-    for group, translated_text in zip(
-        groups,
-        translated_all,
-    ):
-        new_groups.append({
+    return [
+        {
             "start": group["start"],
             "end": group["end"],
             "text": str(translated_text).strip(),
-        })
-
-    return new_groups
+        }
+        for group, translated_text in zip(groups, translated_all)
+    ]
 
 
 # =========================================================
