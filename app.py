@@ -13,15 +13,15 @@ from datetime import datetime, timezone
 
 import requests
 import streamlit as st
+from google import genai
+from google.genai import types
+import imageio_ffmpeg
 
 
 st.set_page_config(
     page_title="Smey Auto Caption",
     page_icon="🇰🇭",
 )
-from google import genai
-from google.genai import types
-import imageio_ffmpeg
 
 
 # =========================================================
@@ -203,37 +203,17 @@ def show_login():
 
 def show_admin_panel():
     st.title("👑 Smey Auto Caption — Admin")
-    st.caption("មានតែម្ចាស់កម្មវិធីប៉ុណ្ណោះដែលអាចបង្កើត Account ឲ្យអ្នកប្រើ។")
+    st.caption("ផ្ទាំងម្ចាស់កម្មវិធី")
 
-    c1, c2 = st.columns(2)
-    if c1.button("📱 Telegram របស់ម្ចាស់", use_container_width=True):
-        st.link_button("បើក Telegram", TELEGRAM_URL, use_container_width=True)
-    if c2.button("🚪 ចាកចេញ", key="admin_logout", use_container_width=True):
+    st.link_button(
+        "📱 Telegram របស់ម្ចាស់",
+        TELEGRAM_URL,
+        use_container_width=True,
+    )
+
+    if st.button("🚪 ចាកចេញ", key="admin_logout", use_container_width=True):
         st.session_state.clear()
         st.rerun()
-
-    st.divider()
-    st.subheader("➕ បង្កើត Account ថ្មី")
-
-    with st.form("create_account_form"):
-        username = st.text_input("👤 Username ថ្មី")
-        password = st.text_input("🔑 Password ថ្មី", type="password")
-        create_clicked = st.form_submit_button(
-            "បង្កើត Account",
-            use_container_width=True,
-        )
-
-    if create_clicked:
-        try:
-            create_account(username, password)
-            st.success(f"✅ បង្កើត Account `{username.strip()}` រួចរាល់។")
-            st.info("សូមផ្ញើ Username និង Password ឲ្យអ្នកប្រើដោយផ្ទាល់។")
-        except Exception as e:
-            st.error("❌ មិនអាចបង្កើត Account បានទេ។")
-            st.exception(e)
-
-    st.divider()
-    st.caption("ℹ️ គ្មាន Plan • គ្មាន Package • គ្មានថ្ងៃផុតកំណត់")
 
 
 # =========================================================
@@ -826,7 +806,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f.write(
                 f"Dialogue: 0,"
                 f"{ass_time(group['start'])},"
-                    f"{ass_time(group['end'])},"
+                f"{ass_time(group['end'])},"
                 f"Khmer,,0,0,0,,"
                 f"{text}\n"
             )
@@ -1236,3 +1216,4 @@ if video is not None:
                 )
 
                 st.exception(e)
+  
