@@ -1,5 +1,4 @@
 import os
-import re
 import subprocess
 import tempfile
 
@@ -7,6 +6,10 @@ import streamlit as st
 import imageio_ffmpeg
 from faster_whisper import WhisperModel
 
+
+# =========================================================
+# PAGE
+# =========================================================
 
 st.set_page_config(
     page_title="Smey Auto Caption",
@@ -28,25 +31,27 @@ def run_ffmpeg(args):
 
     result = subprocess.run(
         [exe] + args,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False
     )
 
     if result.returncode != 0:
+
         error = result.stderr.decode(
             "utf-8",
             errors="ignore"
         )
+
         raise RuntimeError(error)
 
 
-def extract_audio(video, audio):
+def extract_audio(video_path, audio_path):
 
     run_ffmpeg([
         "-y",
         "-i",
-        video,
+        video_path,
         "-vn",
         "-ac",
         "1",
@@ -54,51 +59,24 @@ def extract_audio(video, audio):
         "16000",
         "-c:a",
         "pcm_s16le",
-        audio
+        audio_path
     ])
 
 
 # =========================================================
-# KHMER LARGE V3
+# KHMER MODEL
 # =========================================================
 
 @st.cache_resource
 def load_model():
 
     return WhisperModel(
-        "Tnaot/whisper-large-v3-khmer-ct2",
+        "PhanithLIM/whisper-small-khmer-ct2",
         device="cpu",
         compute_type="int8",
         cpu_threads=1,
         num_workers=1
     )
-
-
-# =========================================================
-# TEXT
-# =========================================================
-
-def clean_text(text):
-
-    text = str(text)
-
-    text = text.replace(
-        "\n",
-        " "
-    )
-
-    text = text.replace(
-        "\r",
-        " "
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
 
 
 # =========================================================
@@ -112,37 +90,51 @@ def ass_time(seconds):
         float(seconds)
     )
 
-    h = int(
+    hours = int(
         seconds // 3600
     )
 
-    m = int(
+    minutes = int(
         (seconds % 3600) // 60
     )
 
-    s = int(
+    secs = int(
         seconds % 60
     )
 
-    cs = int(
+    centiseconds = int(
         (seconds - int(seconds)) * 100
     )
 
     return (
-        f"{h}:"
-        f"{m:02d}:"
-        f"{s:02d}."
-        f"{cs:02d}"
+        f"{hours}:"
+        f"{minutes:02d}:"
+        f"{secs:02d}."
+        f"{centiseconds:02d}"
     )
 
 
 # =========================================================
-# CAPTION
+# TEXT
+# =========================================================
+
+def clean_text(text):
+
+    return " ".join(
+        str(text)
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .split()
+    ).strip()
+
+
+# =========================================================
+# MAKE CAPTIONS
 # =========================================================
 
 def make_captions(segments):
 
-    result = []
+    captions = []
 
     for segment in segments:
 
@@ -162,15 +154,15 @@ def make_captions(segments):
         )
 
         if end <= start:
-            end = start + 0.5
+            end = start + 0.4
 
-        result.append({
+        captions.append({
             "start": start,
             "end": end,
             "text": text
         })
 
-    return result
+    return captions
 
 
 # =========================================================
@@ -179,7 +171,7 @@ def make_captions(segments):
 
 def create_ass(
     captions,
-    path
+    ass_path
 ):
 
     header = """[Script Info]
@@ -197,12 +189,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     with open(
-        path,
+        ass_path,
         "w",
         encoding="utf-8"
-    ) as f:
+    ) as file:
 
-        f.write(header)
+        file.write(header)
 
         for item in captions:
 
@@ -220,7 +212,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 r"\}"
             )
 
-            f.write(
+            file.write(
                 "Dialogue: 0,"
                 + ass_time(item["start"])
                 + ","
@@ -232,17 +224,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # =========================================================
-# BURN
+# BURN CAPTION
 # =========================================================
 
 def burn_caption(
-    video,
-    ass,
-    output
+    video_path,
+    ass_path,
+    output_path
 ):
 
-    ass_path = (
-        ass
+    filter_path = (
+        ass_path
         .replace("\\", "/")
         .replace(":", r"\:")
         .replace("'", r"\'")
@@ -251,9 +243,9 @@ def burn_caption(
     run_ffmpeg([
         "-y",
         "-i",
-        video,
+        video_path,
         "-vf",
-        f"ass='{ass_path}'",
+        f"ass='{filter_path}'",
         "-c:v",
         "libx264",
         "-preset",
@@ -266,7 +258,7 @@ def burn_caption(
         "128k",
         "-movflags",
         "+faststart",
-        output
+        output_path
     ])
 
 
@@ -320,18 +312,22 @@ if video:
                 "smey_auto_caption.mp4"
             )
 
+            # Save video
             with open(
                 video_path,
                 "wb"
-            ) as f:
+            ) as file:
 
-                f.write(
+                file.write(
                     video.getbuffer()
                 )
 
             try:
 
-                # 1
+                # ---------------------------------------------
+                # 1. Audio
+                # ---------------------------------------------
+
                 with st.spinner(
                     "🎵 កំពុងដកសំឡេង..."
                 ):
@@ -341,49 +337,47 @@ if video:
                         audio_path
                     )
 
-                # 2
+                # ---------------------------------------------
+                # 2. Model
+                # ---------------------------------------------
+
                 with st.spinner(
-                    "🧠 កំពុងបើក Khmer Large V3..."
+                    "🧠 កំពុងបើក Khmer Whisper..."
                 ):
 
                     model = load_model()
 
-                # 3
+                # ---------------------------------------------
+                # 3. Speech to Khmer
+                # ---------------------------------------------
+
                 with st.spinner(
-                    "🎙️ កំពុងស្តាប់សំឡេងខ្មែរ..."
+                    "🎙️ កំពុងស្តាប់សំឡេង និងសរសេរខ្មែរ..."
                 ):
 
                     segments, info = model.transcribe(
                         audio_path,
                         language="km",
                         task="transcribe",
-
                         beam_size=5,
                         best_of=5,
-
                         temperature=0,
-
                         vad_filter=True,
-
                         vad_parameters={
                             "min_silence_duration_ms": 300
                         },
-
                         word_timestamps=True,
-
-                        condition_on_previous_text=True,
-
-                        initial_prompt=(
-                            "សូមសរសេរសំឡេងនេះ "
-                            "ជាអក្សរខ្មែរ។"
-                        )
+                        condition_on_previous_text=True
                     )
 
                     segments = list(
                         segments
                     )
 
-                # 4
+                # ---------------------------------------------
+                # 4. Captions
+                # ---------------------------------------------
+
                 captions = make_captions(
                     segments
                 )
@@ -391,14 +385,17 @@ if video:
                 if not captions:
 
                     st.error(
-                        "❌ រកមិនឃើញសំឡេង"
+                        "❌ រកមិនឃើញសំឡេងខ្មែរ"
                     )
 
                     st.stop()
 
-                # 5
+                # ---------------------------------------------
+                # 5. ASS
+                # ---------------------------------------------
+
                 with st.spinner(
-                    "📝 កំពុងរៀបចំ Caption..."
+                    "📝 កំពុងរៀបចំ Caption តាមពេលនិយាយ..."
                 ):
 
                     create_ass(
@@ -406,9 +403,12 @@ if video:
                         ass_path
                     )
 
-                # 6
+                # ---------------------------------------------
+                # 6. Burn
+                # ---------------------------------------------
+
                 with st.spinner(
-                    "🎬 កំពុងបញ្ចូល Caption..."
+                    "🎬 កំពុងបញ្ចូល Caption ទៅ MP4..."
                 ):
 
                     burn_caption(
@@ -417,36 +417,39 @@ if video:
                         output_path
                     )
 
-                # 7
+                # ---------------------------------------------
+                # 7. Output
+                # ---------------------------------------------
+
                 with open(
                     output_path,
                     "rb"
-                ) as f:
+                ) as file:
 
-                    data = f.read()
+                    output_data = file.read()
 
                 st.success(
-                    "✅ រួចរាល់"
+                    "✅ រួចរាល់!"
                 )
 
                 st.video(
-                    data
+                    output_data
                 )
 
                 st.download_button(
                     "⬇️ ទាញយក MP4",
-                    data=data,
+                    data=output_data,
                     file_name="smey_auto_caption.mp4",
                     mime="video/mp4",
                     use_container_width=True
                 )
 
-            except Exception as e:
+            except Exception as error:
 
                 st.error(
                     "❌ App មានបញ្ហា"
                 )
 
                 st.code(
-                    str(e)
+                    str(error)
                 )
