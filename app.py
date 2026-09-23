@@ -149,67 +149,69 @@ def gemini_tts(text, out):
             "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
         ) from e
 
-def openai_image(prompt, aspect_ratio="1:1", quality="low"):
-    """Generate one image with OpenAI GPT Image API without adding another package."""
+def hf_image(prompt, aspect_ratio="1:1", quality="Low"):
+    """Generate an image through Hugging Face Inference Providers."""
     try:
-        api_key = st.secrets["OPENAI_API_KEY"]
+        token = st.secrets["HF_TOKEN"]
     except Exception as e:
         raise RuntimeError(
-            "❌ មិនឃើញ OPENAI_API_KEY ក្នុង Streamlit Secrets ទេ។ "
-            "សូមបន្ថែម OPENAI_API_KEY មុនប្រើ GPT Image។"
+            "❌ មិនឃើញ HF_TOKEN ក្នុង Streamlit Secrets ទេ។ "
+            "សូមបន្ថែម HF_TOKEN មុនប្រើ AI Image។"
         ) from e
 
-    # Use the officially supported landscape/portrait/square sizes.
+    try:
+        from huggingface_hub import InferenceClient
+    except ImportError as e:
+        raise RuntimeError(
+            "❌ មិនទាន់ដំឡើង huggingface_hub ទេ។ "
+            "សូមដាក់ huggingface_hub ក្នុង requirements.txt។"
+        ) from e
+
     size_map = {
-        "1:1": "1024x1024",
-        "9:16": "1024x1536",
-        "3:4": "1024x1536",
-        "16:9": "1536x1024",
-        "4:3": "1536x1024",
+        "1:1": (1024, 1024),
+        "9:16": (768, 1365),
+        "16:9": (1365, 768),
+        "4:3": (1152, 864),
+        "3:4": (864, 1152),
     }
-    size = size_map.get(aspect_ratio, "1024x1024")
+    width, height = size_map.get(aspect_ratio, (1024, 1024))
 
-    payload = {
-        "model": "gpt-image-2.5-sunburst",
-        "prompt": prompt,
-        "size": size,
-        "quality": quality,
-        "output_format": "png",
+    steps_map = {
+        "Low": 4,
+        "Medium": 8,
+        "High": 12,
     }
 
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/images/generations",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    client = InferenceClient(
+        provider="fal-ai",
+        api_key=token,
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        try:
-            detail = json.loads(body).get("error", {}).get("message", body)
-        except Exception:
-            detail = body
-        if e.code == 429:
+        image = client.text_to_image(
+            prompt=prompt,
+            model="krea/Krea-2-Turbo",
+            width=width,
+            height=height,
+            num_inference_steps=steps_map.get(quality, 8),
+        )
+    except Exception as e:
+        message = str(e)
+        if "401" in message or "403" in message or "token" in message.lower():
             raise RuntimeError(
-                "❌ OpenAI GPT Image quota/rate limit អស់។ "
-                "សូមពិនិត្យ API billing/credits របស់ OpenAI។\n\n" + str(detail)
+                "❌ Hugging Face Token មិនត្រឹមត្រូវ ឬមិនមានសិទ្ធិ Inference Providers។"
             ) from e
-        raise RuntimeError(f"❌ OpenAI Image API Error ({e.code}): {detail}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"❌ មិនអាចភ្ជាប់ OpenAI Image API បានទេ: {e.reason}") from e
+        if "429" in message or "quota" in message.lower() or "credit" in message.lower():
+            raise RuntimeError(
+                "❌ Hugging Face quota/credits មិនគ្រប់សម្រាប់ Image generation ទេ។\n\n"
+                + message
+            ) from e
+        raise RuntimeError(f"❌ Hugging Face Image API Error: {message}") from e
 
-    try:
-        image_b64 = result["data"][0]["b64_json"]
-        return base64.b64decode(image_b64)
-    except (KeyError, IndexError, TypeError, ValueError) as e:
-        raise RuntimeError("❌ OpenAI មិនបានផ្ញើរូបភាពមកទេ។") from e
+    from io import BytesIO
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 def duration(path):
     with wave.open(path, "rb") as w:
@@ -358,7 +360,8 @@ dub = st.checkbox(
     value=False,
 )
 
-st.subheader("🖼️ បង្កើតរូបភាព AI — GPT")
+st.subheader("🖼️ បង្កើតរូបភាព AI — Hugging Face")
+st.caption("Hugging Face Inference Providers • Text → Image")
 
 image_prompt = st.text_area(
     "✍️ សរសេរអ្វីដែលចង់បង្កើតជារូបភាព",
@@ -388,11 +391,11 @@ if st.button("🎨 បង្កើតរូបភាព AI", use_container_width
         st.warning("សូមសរសេរ Prompt ជាមុន។")
     else:
         try:
-            with st.spinner("🎨 GPT កំពុងបង្កើតរូបភាព..."):
-                image_data = openai_image(
+            with st.spinner("🎨 AI កំពុងបង្កើតរូបភាព..."):
+                image_data = hf_image(
                     image_prompt.strip(),
                     aspect_ratio=image_ratio,
-                    quality=image_quality.lower(),
+                    quality=image_quality,
                 )
 
             st.image(image_data, use_container_width=True)
