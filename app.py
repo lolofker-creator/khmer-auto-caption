@@ -1,4 +1,4 @@
-import os, json, subprocess, tempfile, wave, base64
+import os, json, subprocess, tempfile, wave, base64, time
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -149,6 +149,31 @@ def gemini_tts(text, out):
             "សូមពិនិត្យ GEMINI_API_KEY និង TTS model access។"
         ) from e
 
+def gemini_image(prompt, aspect_ratio="1:1", image_size="1K"):
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+
+    response = client.models.generate_content(
+        model="gemini-3.1-flash-image",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            response_format={
+                "image": {
+                    "aspect_ratio": aspect_ratio,
+                    "image_size": image_size,
+                }
+            },
+        ),
+    )
+
+    for part in getattr(response, "parts", []) or []:
+        if getattr(part, "inline_data", None) is not None:
+            return part.as_image()
+
+    raise RuntimeError(
+        "❌ Gemini មិនបានផ្ញើរូបភាពមកទេ។ សូមពិនិត្យ GEMINI_API_KEY និងសិទ្ធិប្រើ Image Generation។"
+    )
+
 def duration(path):
     with wave.open(path, "rb") as w:
         return w.getnframes() / w.getframerate()
@@ -296,6 +321,60 @@ dub = st.checkbox(
     value=False,
 )
 
+st.subheader("🖼️ បង្កើតរូបភាព AI — Gemini")
+
+image_prompt = st.text_area(
+    "✍️ សរសេរអ្វីដែលចង់បង្កើតជារូបភាព",
+    placeholder="ឧទាហរណ៍៖ ឆ្កែស្ទាវស្លៀកខោអាវខ្មែរឈរនៅវាលស្រែពេលថ្ងៃលិច, 3D cinematic, realistic, beautiful lighting",
+    height=120,
+    key="image_prompt",
+)
+
+img_c1, img_c2 = st.columns(2)
+with img_c1:
+    image_ratio = st.selectbox(
+        "📐 សមាមាត្រ",
+        ["1:1", "9:16", "16:9", "4:3", "3:4"],
+        index=0,
+        key="image_ratio",
+    )
+with img_c2:
+    image_size = st.selectbox(
+        "✨ គុណភាព",
+        ["1K", "2K", "4K"],
+        index=0,
+        key="image_size",
+    )
+
+if st.button("🎨 បង្កើតរូបភាព AI", use_container_width=True):
+    if not image_prompt.strip():
+        st.warning("សូមសរសេរ Prompt ជាមុន។")
+    else:
+        try:
+            with st.spinner("🎨 Gemini កំពុងបង្កើតរូបភាព..."):
+                generated = gemini_image(
+                    image_prompt.strip(),
+                    aspect_ratio=image_ratio,
+                    image_size=image_size,
+                )
+
+            from io import BytesIO
+            buf = BytesIO()
+            generated.save(buf, format="PNG")
+            image_data = buf.getvalue()
+
+            st.image(image_data, use_container_width=True)
+            st.download_button(
+                "⬇️ ទាញយករូបភាព",
+                data=image_data,
+                file_name="smey_ai_image.png",
+                mime="image/png",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error("❌ បង្កើតរូបភាពមិនបាន")
+            st.exception(e)
+
 st.subheader("🗣️ អក្សរ → សំឡេង Gemini")
 
 tts_text = st.text_area(
@@ -416,4 +495,4 @@ if video:
             except Exception as e:
                 st.error("❌ មានបញ្ហា")
                 st.exception(e)
-
+                
