@@ -20,15 +20,21 @@ MAX_DOWNLOAD_MB = 500
 
 
 def ffmpeg(args):
+    # Keep FFmpeg output clean and show the real error instead of the long
+    # FFmpeg version/configuration banner.
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [exe, "-hide_banner", "-loglevel", "error", "-nostdin"] + list(args)
     p = subprocess.run(
-        [imageio_ffmpeg.get_ffmpeg_exe()] + args,
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     if p.returncode:
-        raise RuntimeError(
-            p.stderr.decode("utf-8", errors="ignore")[-3000:]
-        )
+        err = p.stderr.decode("utf-8", errors="ignore").strip()
+        out = p.stdout.decode("utf-8", errors="ignore").strip()
+        detail = err or out or f"FFmpeg exit code: {p.returncode}"
+        raise RuntimeError(detail[-4000:])
+    return p
 
 
 def sec(v):
@@ -561,15 +567,24 @@ if video:
 
             try:
                 with st.spinner("🎵 កំពុងដកសំឡេង..."):
+                    # Explicitly select the first audio stream. This gives a
+                    # clear error when the uploaded/downloaded video has no audio.
                     ffmpeg([
                         "-y",
                         "-i", video_path,
+                        "-map", "0:a:0",
                         "-vn",
                         "-ac", "1",
                         "-ar", "16000",
                         "-c:a", "pcm_s16le",
                         audio_path,
                     ])
+
+                if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
+                    raise RuntimeError(
+                        "❌ វីដេអូនេះមិនមាន Audio ដែលអាចអានបានទេ។ "
+                        "សូមសាក Upload វីដេអូដែលមានសំឡេង។"
+                    )
 
                 client = genai.Client(
                     api_key=st.secrets["GEMINI_API_KEY"]
@@ -648,4 +663,5 @@ if video:
             except Exception as e:
                 st.error("❌ Auto Caption មិនបាន")
                 st.warning(str(e))
-                
+                st.caption("💡 បើ Error និយាយពី Audio/Stream វីដេអូអាចមិនមានសំឡេង ឬ File មិនពេញលេញ។")
+                    
