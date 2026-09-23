@@ -1,4 +1,4 @@
-import os, json, time, subprocess, tempfile, urllib.request, urllib.error, wave
+import os, json, subprocess, tempfile, wave, base64
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -110,55 +110,32 @@ def translate(groups, client):
 
     return [{**g, "text": t} for g, t in zip(groups, result)]
 
-def doslarb_tts(text, out):
-    key = str(st.secrets.get("DOSLARB_API_KEY", "")).strip()
-    if not key:
-        raise RuntimeError("❌ ខ្វះ DOSLARB_API_KEY ក្នុង Streamlit Secrets។")
+def gemini_tts(text, out):
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-    if len(text) > 1200:
-        text = text[:1200]
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-preview-tts",
+        contents=text,
+        config=types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name="Kore"
+                    )
+                )
+            ),
+        ),
+    )
 
-    last = st.session_state.get("dos_last", 0.0)
-    wait = 6.3 - (time.monotonic() - last)
-    if wait > 0:
-        time.sleep(wait)
+    audio = response.candidates[0].content.parts[0].inline_data
+    raw = base64.b64decode(audio.data) if isinstance(audio.data, str) else audio.data
 
-    data = json.dumps(
-        {"text": text, "voice": "sovann"},
-        ensure_ascii=False
-    ).encode()
-
-    for attempt in range(5):
-        req = urllib.request.Request(
-            "https://doslarb.cloud/api/v1/tts",
-            data=data,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-                "Accept": "audio/mpeg",
-                "User-Agent": "Mozilla/5.0",
-            },
-        )
-        st.session_state["dos_last"] = time.monotonic()
-
-        try:
-            with urllib.request.urlopen(req, timeout=90) as r:
-                mp3 = r.read()
-            break
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "replace")[:300]
-            if e.code == 429:
-                if attempt == 4:
-                    raise RuntimeError("❌ Doslarb 429: ដល់ rate limit បណ្ដោះអាសន្ន។ សូមសាកម្ដងទៀត។")
-                time.sleep(max(8, float(e.headers.get("Retry-After", "0") or 0), 8 * (attempt + 1)))
-                continue
-            raise RuntimeError(f"❌ Doslarb Error {e.code}: {body}")
-
-    mp3path = out[:-4] + ".mp3"
-    open(mp3path, "wb").write(mp3)
-    ffmpeg(["-y", "-i", mp3path, "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", out])
-    os.remove(mp3path)
+    with wave.open(out, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(raw)
 
 def duration(path):
     with wave.open(path, "rb") as w:
@@ -192,7 +169,7 @@ def dubbing(groups, out, tmp):
         raw = os.path.join(tmp, f"raw{i}.wav")
         synced = os.path.join(tmp, f"sync{i}.wav")
 
-        doslarb_tts(g["text"], raw)
+        gemini_tts(g["text"], raw)
         sync_clip(raw, synced, max(0.2, g["end"] - g["start"]))
         clips.append((synced, g["start"]))
 
@@ -313,6 +290,13 @@ if st.button("🔊 សាកសំឡេង Sovann", use_container_width=True):
                 audio_data = open(test_wav, "rb").read()
                 st.success("✅ បានបង្កើតសំឡេងរួចរាល់!")
                 st.audio(audio_data, format="audio/wav")
+                st.download_button(
+                    "⬇️ ទាញយកសំឡេង Sovann",
+                    data=audio_data,
+                    file_name="sovann_test.wav",
+                    mime="audio/wav",
+                    use_container_width=True,
+                )
         except Exception as e:
             if "429" in str(e):
                 st.error("❌ Doslarb API Request អស់ហើយ (120/120)។ ត្រូវរង់ចាំ quota reset ឬប្តូរ plan មុនសាកសំឡេង។")
@@ -332,9 +316,40 @@ translate_to_kh = st.checkbox(
 )
 
 dub = st.checkbox(
-    "🎙️ AI Dubbing — Sovann",
+    "🎙️ AI Dubbing — Gemini",
     value=False,
 )
+
+st.subheader("🗣️ អក្សរ → សំឡេង Gemini")
+
+tts_text = st.text_area(
+    "✍️ សរសេរអត្ថបទ",
+    placeholder="សរសេរអត្ថបទខ្មែរនៅទីនេះ...",
+    height=100,
+)
+
+if st.button("🔊 បង្កើតសំឡេង Gemini", use_container_width=True):
+    if not tts_text.strip():
+        st.warning("សូមសរសេរអត្ថបទជាមុន។")
+    else:
+        try:
+            with tempfile.TemporaryDirectory() as t:
+                audio_path = os.path.join(t, "gemini_tts.wav")
+                with st.spinner("🔊 កំពុងបង្កើតសំឡេង..."):
+                    gemini_tts(tts_text.strip(), audio_path)
+
+                audio_data = open(audio_path, "rb").read()
+                st.audio(audio_data, format="audio/wav")
+                st.download_button(
+                    "⬇️ ទាញយកសំឡេង",
+                    data=audio_data,
+                    file_name="gemini_tts.wav",
+                    mime="audio/wav",
+                    use_container_width=True,
+                )
+        except Exception as e:
+            st.error("❌ បង្កើតសំឡេងមិនបាន")
+            st.exception(e)
 
 video = st.file_uploader(
     "🎥 ជ្រើសវីដេអូ",
@@ -406,7 +421,7 @@ if video:
                     with st.spinner("🎬 កំពុងដាក់ Caption..."):
                         burn(vp, ass, out)
                 else:
-                    with st.spinner("🔊 កំពុងបង្កើតសំឡេង Sovann + Auto Sync..."):
+                    with st.spinner("🔊 កំពុងបង្កើតសំឡេង Gemini + Auto Sync..."):
                         dubbing(groups, da, tmp)
                     replace_audio(vp, da, out)
 
@@ -425,4 +440,4 @@ if video:
             except Exception as e:
                 st.error("❌ មានបញ្ហា")
                 st.exception(e)
-                
+
