@@ -3,3 +3,4 @@ google-genai
 imageio-ffmpeg
 huggingface_hub
 Pillow
+yt-dlp
