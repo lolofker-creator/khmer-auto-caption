@@ -98,6 +98,29 @@ def apk_upload(name, data):
         msg=e.read().decode('utf-8',errors='ignore')
         raise RuntimeError(f'Supabase Name HTTP {e.code}: {msg or e.reason}') from e
 
+
+def apk_rename(name):
+    name = re.sub(r'[\\/:*?"<>|]', '', name.strip()).strip()
+    if not name:
+        raise RuntimeError('សូមបញ្ចូលឈ្មោះ APK')
+    if not name.lower().endswith('.apk'):
+        name += '.apk'
+    key = secret('SUPABASE_SERVICE_KEY')
+    base = secret('SUPABASE_URL').rstrip('/')
+    if not key or not base:
+        raise RuntimeError('សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY ក្នុង Secrets')
+    req = urllib.request.Request(base + '/storage/v1/object/apk/current_name.txt', data=name.encode('utf-8'), headers={
+        'apikey':key,'Authorization':f'Bearer {key}',
+        'Content-Type':'text/plain; charset=utf-8','x-upsert':'true'
+    }, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            pass
+    except urllib.error.HTTPError as e:
+        msg=e.read().decode('utf-8',errors='ignore')
+        raise RuntimeError(f'Supabase Name HTTP {e.code}: {msg or e.reason}') from e
+    return name
+
 def apk_download():
     key = secret('SUPABASE_SERVICE_KEY')
     base = secret('SUPABASE_URL').rstrip('/')
@@ -486,6 +509,20 @@ with st.expander('📱 APK'):
                     st.success(f'✅ Upload រួចរាល់: {name}')
                     st.rerun()
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
+
+        rename=st.text_input('✏️ កែឈ្មោះ APK',placeholder='ឈ្មោះថ្មី...',key='apk_rename_input')
+        if st.button('💾 រក្សាទុកឈ្មោះថ្មី',use_container_width=True,key='apk_rename_button'):
+            admin=secret('APK_ADMIN_PASSWORD')
+            if not admin: st.error('សូមកំណត់ APK_ADMIN_PASSWORD ក្នុង Secrets')
+            elif password != admin: st.error('❌ Password មិនត្រឹមត្រូវ')
+            elif not rename.strip(): st.warning('⚠️ សូមបញ្ចូលឈ្មោះថ្មី')
+            else:
+                try:
+                    with st.spinner('កំពុងប្តូរឈ្មោះ APK...'):
+                        new_name=apk_rename(rename)
+                    st.success(f'✅ ឈ្មោះថ្មី: {new_name}')
+                    st.rerun()
+                except Exception as e: st.error(f'❌ កែឈ្មោះមិនបាន: {e}')
 
 st.divider()
 st.subheader('🎬 Auto Caption')
