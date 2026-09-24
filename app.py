@@ -46,59 +46,149 @@ def secret(name):
     except Exception:
         return ''
 
+def secret(name):
+    try:
+        return str(st.secrets.get(name, "") or "").strip()
+    except Exception:
+        return ""
+
 def supabase_request(method, path, body=None, content_type=None):
-    url = secret('SUPABASE_URL').rstrip('/') + path
-    key = secret('SUPABASE_SERVICE_KEY')
-    if not url or not key:
-        raise RuntimeError('សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY ក្នុង Secrets')
-    headers = {'apikey': key, 'Authorization': f'Bearer {key}'}
+    base = secret("SUPABASE_URL").rstrip("/")
+    key = secret("SUPABASE_SERVICE_KEY")
+
+    if not base or not key:
+        raise RuntimeError("សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY")
+
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+    }
+
     if content_type:
-        headers['Content-Type'] = content_type
-    data = body
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return r.read()
+        headers["Content-Type"] = content_type
+
+    try:
+        req = urllib.request.Request(
+            base + path,
+            data=body,
+            headers=headers,
+            method=method
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.read()
+
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Supabase HTTP {e.code}: {detail}")
 
 def supabase_bucket():
-    return 'apk'
+    return "apk"
 
 def supabase_ensure_bucket():
-    payload = json.dumps({'id': supabase_bucket(), 'name': supabase_bucket(), 'public': False}).encode()
+    payload = json.dumps({
+        "id": "apk",
+        "name": "apk",
+        "public": False
+    }).encode()
+
     try:
-        supabase_request('POST', '/storage/v1/bucket', payload, 'application/json')
+        supabase_request(
+            "POST",
+            "/storage/v1/bucket",
+            payload,
+            "application/json"
+        )
     except Exception as e:
-        if '409' not in str(e) and 'already exists' not in str(e).lower():
+        if "409" not in str(e) and "already exists" not in str(e).lower():
             raise
 
 def supabase_list_apk():
-    payload = json.dumps({'prefix': '', 'limit': 100, 'offset': 0, 'sortBy': {'column': 'name', 'order': 'asc'}}).encode()
-    raw = supabase_request('POST', f'/storage/v1/object/list/{supabase_bucket()}', payload, 'application/json')
-    items = json.loads(raw.decode('utf-8') or '[]')
-    return [x.get('name', '') for x in items if x.get('name', '').lower().endswith('.apk')]
+    payload = json.dumps({
+        "prefix": "",
+        "limit": 100,
+        "offset": 0,
+        "sortBy": {
+            "column": "name",
+            "order": "asc"
+        }
+    }).encode()
+
+    raw = supabase_request(
+        "POST",
+        "/storage/v1/object/list/apk",
+        payload,
+        "application/json"
+    )
+
+    items = json.loads(raw.decode("utf-8") or "[]")
+
+    return [
+        x.get("name", "")
+        for x in items
+        if x.get("name", "").lower().endswith(".apk")
+    ]
 
 def supabase_delete_apks(names):
     if not names:
         return
-    payload = json.dumps(names).encode()
-    supabase_request('DELETE', f'/storage/v1/object/{supabase_bucket()}', payload, 'application/json')
+
+    payload = json.dumps({
+        "prefixes": names
+    }).encode()
+
+    supabase_request(
+        "DELETE",
+        "/storage/v1/object/apk",
+        payload,
+        "application/json"
+    )
 
 def supabase_upload_apk(name, data):
     supabase_ensure_bucket()
+
     old = supabase_list_apk()
     supabase_delete_apks(old)
-    path = urllib.parse.quote(name, safe='')
-    headers_key = secret('SUPABASE_SERVICE_KEY')
-    url = secret('SUPABASE_URL').rstrip('/') + f'/storage/v1/object/{supabase_bucket()}/{path}'
-    req = urllib.request.Request(url, data=data, headers={
-        'apikey': headers_key,
-        'Authorization': f'Bearer {headers_key}',
-        'Content-Type': 'application/vnd.android.package-archive',
-        'x-upsert': 'true'
-    }, method='POST')
-    with urllib.request.urlopen(req, timeout=120) as r:
-        r.read()
+
+    path = urllib.parse.quote(name, safe="")
+
+    key = secret("SUPABASE_SERVICE_KEY")
+    base = secret("SUPABASE_URL").rstrip("/")
+
+    req = urllib.request.Request(
+        f"{base}/storage/v1/object/apk/{path}",
+        data=data,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/vnd.android.package-archive",
+            "x-upsert": "true"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Supabase Upload HTTP {e.code}: {detail}")
 
 def supabase_download_current_apk():
+    names = supabase_list_apk()
+
+    if not names:
+        return None, None
+
+    name = names[0]
+    path = urllib.parse.quote(name, safe="")
+
+    raw = supabase_request(
+        "GET",
+        f"/storage/v1/object/apk/{path}"
+    )
+
+    return name, raw():
     names = supabase_list_apk()
     if not names:
         return None, None
