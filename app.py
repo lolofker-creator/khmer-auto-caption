@@ -3,532 +3,1079 @@ import re
 import subprocess
 import tempfile
 import urllib.request
-import urllib.parse
 import time
 import wave
 import json
+
 from gtts import gTTS
 import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭')
-st.title('🇰🇭 Smey Auto Caption')
-st.caption('Gemini → Caption → Auto Translate → MP4')
-st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
-TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
-TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
+
+
+st.set_page_config(
+    page_title="🇰🇭 Smey Auto Caption",
+    page_icon="🇰🇭",
+)
+
+st.title("🇰🇭 Smey Auto Caption")
+st.caption("Gemini → Caption → Auto Translate → MP4")
+st.markdown(
+    "📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** "
+    "[Telegram @Smeytk](https://t.me/Smeytk)"
+)
+
+
+TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
+TRANSLATE_MODEL = "gemini-3.1-flash-lite"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_DIR = os.path.join(BASE_DIR, 'fonts')
-FONT_PATH = os.path.join(FONT_DIR, 'NotoSansKhmer-Regular.ttf')
-FONT_URL = 'https://raw.githubusercontent.com/ghostlypi/NotoSans/main/NotoSansKhmer-Regular.ttf'
+FONT_DIR = os.path.join(BASE_DIR, "fonts")
+FONT_PATH = os.path.join(
+    FONT_DIR,
+    "NotoSansKhmer-Regular.ttf",
+)
+FONT_URL = (
+    "https://raw.githubusercontent.com/ghostlypi/"
+    "NotoSans/main/NotoSansKhmer-Regular.ttf"
+)
+
+
+# =========================================================
+# COMMON
+# =========================================================
 
 def get_value(obj, name, default=None):
     if obj is None:
         return default
+
     if isinstance(obj, dict):
         return obj.get(name, default)
+
     return getattr(obj, name, default)
+
 
 def ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
+
 def get_api_key():
     try:
-        key = st.secrets.get('GEMINI_API_KEY', '')
+        key = st.secrets.get(
+            "GEMINI_API_KEY",
+            "",
+        )
     except Exception:
-        key = ''
-    return str(key or os.getenv('GEMINI_API_KEY', '')).strip()
+        key = ""
+
+    return str(
+        key or os.getenv(
+            "GEMINI_API_KEY",
+            "",
+        )
+    ).strip()
+
 
 def ass_time(value):
-    value = max(0.0, float(value))
+    value = max(
+        0.0,
+        float(value),
+    )
+
     h = int(value // 3600)
     m = int(value % 3600 // 60)
     s = value % 60
-    return f'{h}:{m:02d}:{s:05.2f}'
+
+    return f"{h}:{m:02d}:{s:05.2f}"
+
 
 @st.cache_resource
 def get_gemini_client(api_key):
-    return genai.Client(api_key=api_key)
+    return genai.Client(
+        api_key=api_key
+    )
 
-def retry_gemini(call, attempts=4, delay=2):
+
+def retry_gemini(
+    call,
+    attempts=4,
+    delay=2,
+):
     last_error = None
+
     for attempt in range(attempts):
         try:
             return call()
+
         except Exception as exc:
             last_error = exc
             message = str(exc).lower()
-            temporary = any((code in message for code in ('429', '500', '502', '503', '504', 'unavailable', 'resource_exhausted')))
-            if not temporary or attempt == attempts - 1:
+
+            temporary = any(
+                code in message
+                for code in (
+                    "429",
+                    "500",
+                    "502",
+                    "503",
+                    "504",
+                    "unavailable",
+                    "resource_exhausted",
+                )
+            )
+
+            if (
+                not temporary
+                or attempt == attempts - 1
+            ):
                 raise
-            time.sleep(delay * 2 ** attempt)
+
+            time.sleep(
+                delay * 2 ** attempt
+            )
+
     raise last_error
 
+
+# =========================================================
+# KHMER FONT
+# =========================================================
+
 def ensure_khmer_font():
-    os.makedirs(FONT_DIR, exist_ok=True)
-    if os.path.isfile(FONT_PATH) and os.path.getsize(FONT_PATH) > 10000:
+    os.makedirs(
+        FONT_DIR,
+        exist_ok=True,
+    )
+
+    if (
+        os.path.isfile(FONT_PATH)
+        and os.path.getsize(FONT_PATH) > 10000
+    ):
         return FONT_PATH
+
     try:
-        request = urllib.request.Request(FONT_URL, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(request, timeout=30) as response:
+        request = urllib.request.Request(
+            FONT_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            },
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=30,
+        ) as response:
             data = response.read()
+
         if len(data) < 10000:
-            raise RuntimeError('Font file ដែលទាញយកមកមានទំហំមិនត្រឹមត្រូវ')
-        with open(FONT_PATH, 'wb') as f:
+            raise RuntimeError(
+                "Font file ដែលទាញយកមកមានទំហំមិនត្រឹមត្រូវ"
+            )
+
+        with open(
+            FONT_PATH,
+            "wb",
+        ) as f:
             f.write(data)
+
         return FONT_PATH
+
     except Exception as e:
-        raise RuntimeError(f'មិនអាចរក/ទាញយក Noto Sans Khmer Font បាន។ សូមពិនិត្យ Internet របស់ Streamlit Cloud។\n{e}') from e
+        raise RuntimeError(
+            "មិនអាចរក/ទាញយក "
+            "Noto Sans Khmer Font បាន។ "
+            "សូមពិនិត្យ Internet របស់ Streamlit Cloud.\n"
+            f"{e}"
+        ) from e
+
+
+# =========================================================
+# TRANSCRIPTION
+# =========================================================
 
 def parse_duration(value):
     if value is None:
         return 0.0
-    if isinstance(value, (int, float)):
+
+    if isinstance(
+        value,
+        (int, float),
+    ):
         return float(value)
+
     text = str(value).strip()
-    if text.endswith('s'):
+
+    if text.endswith("s"):
         text = text[:-1]
+
     try:
         return float(text)
     except Exception:
         return 0.0
 
-def add_word(result, word, start=None, end=None):
-    text = get_value(word, 'word', None)
+
+def add_word(
+    result,
+    word,
+    start=None,
+    end=None,
+):
+    text = get_value(
+        word,
+        "word",
+        None,
+    )
+
     if text is None:
-        text = get_value(word, 'text', '')
+        text = get_value(
+            word,
+            "text",
+            "",
+        )
+
     if not text:
         return
+
     if start is None:
-        start = get_value(word, 'start_offset', None)
+        start = get_value(
+            word,
+            "start_offset",
+            None,
+        )
+
     if start is None:
-        start = get_value(word, 'start_time', None)
+        start = get_value(
+            word,
+            "start_time",
+            None,
+        )
+
     if start is None:
-        start = get_value(word, 'start', 0)
+        start = get_value(
+            word,
+            "start",
+            0,
+        )
+
     if end is None:
-        end = get_value(word, 'end_offset', None)
+        end = get_value(
+            word,
+            "end_offset",
+            None,
+        )
+
     if end is None:
-        end = get_value(word, 'end_time', None)
+        end = get_value(
+            word,
+            "end_time",
+            None,
+        )
+
     if end is None:
-        end = get_value(word, 'end', start)
-    result.append({'text': str(text), 'start': parse_duration(start), 'end': parse_duration(end)})
+        end = get_value(
+            word,
+            "end",
+            start,
+        )
+
+    result.append(
+        {
+            "text": str(text),
+            "start": parse_duration(start),
+            "end": parse_duration(end),
+        }
+    )
+
 
 def words_from(response):
     words = []
-    for candidate in get_value(response, 'candidates', []) or []:
-        content = get_value(candidate, 'content', None)
-        for part in get_value(content, 'parts', []) or []:
-            transcription = get_value(part, 'audio_transcription', None)
+
+    for candidate in (
+        get_value(
+            response,
+            "candidates",
+            [],
+        )
+        or []
+    ):
+        content = get_value(
+            candidate,
+            "content",
+            None,
+        )
+
+        for part in (
+            get_value(
+                content,
+                "parts",
+                [],
+            )
+            or []
+        ):
+            transcription = get_value(
+                part,
+                "audio_transcription",
+                None,
+            )
+
             if transcription is None:
                 continue
-            current_words = get_value(transcription, 'words', []) or []
+
+            current_words = get_value(
+                transcription,
+                "words",
+                [],
+            ) or []
+
             for word in current_words:
-                add_word(words, word)
-    transcription = get_value(response, 'audio_transcription', None)
+                add_word(
+                    words,
+                    word,
+                )
+
+    transcription = get_value(
+        response,
+        "audio_transcription",
+        None,
+    )
+
     if transcription is not None:
-        for word in get_value(transcription, 'words', []) or []:
-            add_word(words, word)
-    direct_words = get_value(response, 'words', None)
+        for word in (
+            get_value(
+                transcription,
+                "words",
+                [],
+            )
+            or []
+        ):
+            add_word(
+                words,
+                word,
+            )
+
+    direct_words = get_value(
+        response,
+        "words",
+        None,
+    )
+
     if direct_words:
         for word in direct_words:
-            add_word(words, word)
-    annotations = get_value(response, 'annotations', None)
+            add_word(
+                words,
+                word,
+            )
+
+    annotations = get_value(
+        response,
+        "annotations",
+        None,
+    )
+
     if annotations:
         for item in annotations:
-            if get_value(item, 'type', '') == 'word_info':
-                add_word(words, item)
+            if (
+                get_value(
+                    item,
+                    "type",
+                    "",
+                )
+                == "word_info"
+            ):
+                add_word(
+                    words,
+                    item,
+                )
+
     return words
 
-def detect_language(text):
-    khmer = len(re.findall('[\\u1780-\\u17FF]', text))
-    chinese = len(re.findall('[\\u4E00-\\u9FFF]', text))
-    if khmer > chinese and khmer > 0:
-        return 'Khmer'
-    if chinese > 0:
-        return 'Chinese'
-    return 'Unknown'
 
-def make_groups(words, max_words=12, max_seconds=5.0):
+def detect_language(text):
+    khmer = len(
+        re.findall(
+            r"[\u1780-\u17FF]",
+            text,
+        )
+    )
+
+    chinese = len(
+        re.findall(
+            r"[\u4E00-\u9FFF]",
+            text,
+        )
+    )
+
+    if khmer > chinese and khmer > 0:
+        return "Khmer"
+
+    if chinese > 0:
+        return "Chinese"
+
+    return "Unknown"
+
+
+def make_groups(
+    words,
+    max_words=12,
+    max_seconds=5.0,
+):
     groups = []
     current = []
+
     for word in words:
         if not current:
             current = [word]
             continue
-        duration = word['end'] - current[0]['start']
-        if len(current) >= max_words or duration >= max_seconds:
+
+        duration = (
+            word["end"]
+            - current[0]["start"]
+        )
+
+        if (
+            len(current) >= max_words
+            or duration >= max_seconds
+        ):
             groups.append(current)
             current = [word]
         else:
             current.append(word)
+
     if current:
         groups.append(current)
+
     result = []
+
     for group in groups:
-        text = ' '.join((x['text'] for x in group)).strip()
+        text = " ".join(
+            x["text"]
+            for x in group
+        ).strip()
+
         if text:
-            result.append({'text': text, 'start': group[0]['start'], 'end': group[-1]['end']})
+            result.append(
+                {
+                    "text": text,
+                    "start": group[0]["start"],
+                    "end": group[-1]["end"],
+                }
+            )
+
     return result
 
-def transcribe(client, audio_path, source_language):
-    with open(audio_path, 'rb') as f:
+
+def transcribe(
+    client,
+    audio_path,
+    source_language,
+):
+    with open(
+        audio_path,
+        "rb",
+    ) as f:
         audio_data = f.read()
-    prompt = 'Transcribe the spoken audio exactly. Return accurate word-level timestamps. Do not translate the speech.'
+
+    prompt = (
+        "Transcribe the spoken audio exactly. "
+        "Return accurate word-level timestamps. "
+        "Do not translate the speech."
+    )
+
     language_codes = None
-    if source_language == 'Chinese':
-        language_codes = ['cmn-Hans-CN']
-    elif source_language == 'Khmer':
-        language_codes = ['km-KH']
-    transcription_kwargs = {'word_timestamp': True}
+
+    if source_language == "Chinese":
+        language_codes = [
+            "cmn-Hans-CN"
+        ]
+
+    elif source_language == "Khmer":
+        language_codes = [
+            "km-KH"
+        ]
+
+    transcription_kwargs = {
+        "word_timestamp": True
+    }
+
     if language_codes:
-        transcription_kwargs['language_codes'] = language_codes
-    transcription_config = types.AudioTranscriptionConfig(**transcription_kwargs)
+        transcription_kwargs[
+            "language_codes"
+        ] = language_codes
+
+    transcription_config = (
+        types.AudioTranscriptionConfig(
+            **transcription_kwargs
+        )
+    )
 
     def call():
-        return client.models.generate_content(model=TRANSCRIBE_MODEL, contents=[types.Part.from_bytes(data=audio_data, mime_type='audio/wav'), prompt], config=types.GenerateContentConfig(audio_transcription_config=transcription_config))
+        return client.models.generate_content(
+            model=TRANSCRIBE_MODEL,
+            contents=[
+                types.Part.from_bytes(
+                    data=audio_data,
+                    mime_type="audio/wav",
+                ),
+                prompt,
+            ],
+            config=types.GenerateContentConfig(
+                audio_transcription_config=(
+                    transcription_config
+                )
+            ),
+        )
+
     return retry_gemini(call)
 
-def translate_groups(client, groups, target_language):
-    if not groups or target_language == 'No translation':
+
+# =========================================================
+# TRANSLATION
+# =========================================================
+
+def translate_groups(
+    client,
+    groups,
+    target_language,
+):
+    if (
+        not groups
+        or target_language == "No translation"
+    ):
         return groups
+
     translated = []
     batch_size = 15
-    for start in range(0, len(groups), batch_size):
-        batch = groups[start:start + batch_size]
-        texts = [item['text'] for item in batch]
-        prompt = f'Translate each subtitle line into {target_language}.\nReturn exactly one translated line per input line, in the same order. Do not add explanations. Keep names and numbers accurate.\n\nInput:\n{texts}'
-        schema = types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING))
+
+    for start in range(
+        0,
+        len(groups),
+        batch_size,
+    ):
+        batch = groups[
+            start:start + batch_size
+        ]
+
+        texts = [
+            item["text"]
+            for item in batch
+        ]
+
+        prompt = (
+            f"Translate each subtitle line "
+            f"into {target_language}.\n"
+            "Return exactly one translated line "
+            "per input line, in the same order. "
+            "Do not add explanations. "
+            "Keep names and numbers accurate.\n\n"
+            f"Input:\n{texts}"
+        )
+
+        schema = types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(
+                type=types.Type.STRING
+            ),
+        )
 
         def call():
-            return client.models.generate_content(model=TRANSLATE_MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=schema))
+            return client.models.generate_content(
+                model=TRANSLATE_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                ),
+            )
+
         try:
             response = retry_gemini(call)
-            values = get_value(response, 'parsed', None)
+
+            values = get_value(
+                response,
+                "parsed",
+                None,
+            )
+
             if values is None:
-                raw = get_value(response, 'text', '') or ''
+                raw = get_value(
+                    response,
+                    "text",
+                    "",
+                ) or ""
+
                 try:
                     values = json.loads(raw)
                 except Exception:
                     values = []
-            if not isinstance(values, list) or len(values) != len(batch):
-                raise RuntimeError('Translation response មិនត្រឹមត្រូវ')
-        except Exception as exc:
-            st.warning('⚠️ Gemini Translation មិនទាន់អាចប្រើបាន។ Caption នឹងរក្សាភាសាដើមសម្រាប់ផ្នែកនេះ។')
-            values = [item['text'] for item in batch]
+
+            if (
+                not isinstance(values, list)
+                or len(values) != len(batch)
+            ):
+                raise RuntimeError(
+                    "Translation response មិនត្រឹមត្រូវ"
+                )
+
+        except Exception:
+            st.warning(
+                "⚠️ Gemini Translation មិនទាន់អាចប្រើបាន។ "
+                "Caption នឹងរក្សាភាសាដើមសម្រាប់ផ្នែកនេះ។"
+            )
+
+            values = [
+                item["text"]
+                for item in batch
+            ]
+
         for index, item in enumerate(batch):
-            translated.append({'text': str(values[index]), 'start': item['start'], 'end': item['end']})
+            translated.append(
+                {
+                    "text": str(
+                        values[index]
+                    ),
+                    "start": item["start"],
+                    "end": item["end"],
+                }
+            )
+
     return translated
-ASS_HEADER = '[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,55,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 
-def make_ass(groups, ass_path):
-    with open(ass_path, 'w', encoding='utf-8-sig') as f:
+
+# =========================================================
+# ASS CAPTION
+# =========================================================
+
+ASS_HEADER = (
+    "[Script Info]\n"
+    "ScriptType: v4.00+\n"
+    "PlayResX: 1920\n"
+    "PlayResY: 1080\n"
+    "ScaledBorderAndShadow: yes\n"
+    "WrapStyle: 2\n"
+    "\n"
+    "[V4+ Styles]\n"
+    "Format: Name, Fontname, Fontsize, "
+    "PrimaryColour, SecondaryColour, "
+    "OutlineColour, BackColour, Bold, Italic, "
+    "Underline, StrikeOut, ScaleX, ScaleY, "
+    "Spacing, Angle, BorderStyle, Outline, "
+    "Shadow, Alignment, MarginL, MarginR, "
+    "MarginV, Encoding\n"
+    "Style: Default,Noto Sans Khmer,52,"
+    "&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H80000000,0,0,0,0,100,100,0,0,1,"
+    "3,1,2,60,60,55,1\n"
+    "\n"
+    "[Events]\n"
+    "Format: Layer, Start, End, Style, Name, "
+    "MarginL, MarginR, MarginV, Effect, Text\n"
+)
+
+
+def make_ass(
+    groups,
+    ass_path,
+):
+    with open(
+        ass_path,
+        "w",
+        encoding="utf-8-sig",
+    ) as f:
         f.write(ASS_HEADER)
-        for item in groups:
-            text = item['text'].replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}').replace('\n', '\\N')
-            f.write(f"Dialogue: 0,{ass_time(item['start'])},{ass_time(item['end'])},Default,,0,0,0,,{text}\n")
 
-def burn(video_path, ass_path, output_path):
+        for item in groups:
+            text = (
+                item["text"]
+                .replace("\\", "\\\\")
+                .replace("{", "\\{")
+                .replace("}", "\\}")
+                .replace("\n", "\\N")
+            )
+
+            f.write(
+                "Dialogue: 0,"
+                f"{ass_time(item['start'])},"
+                f"{ass_time(item['end'])},"
+                "Default,,0,0,0,,"
+                f"{text}\n"
+            )
+
+
+def burn(
+    video_path,
+    ass_path,
+    output_path,
+):
     ensure_khmer_font()
-    font_dir = FONT_DIR.replace('\\', '/')
-    ass_file = ass_path.replace('\\', '/')
-    vf = f"ass=filename='{ass_file}':fontsdir='{font_dir}':shaping=complex"
-    command = [ffmpeg(), '-y', '-i', video_path, '-vf', vf, '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'copy', '-movflags', '+faststart', output_path]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    font_dir = FONT_DIR.replace(
+        "\\",
+        "/",
+    )
+
+    ass_file = ass_path.replace(
+        "\\",
+        "/",
+    )
+
+    vf = (
+        f"ass=filename='{ass_file}':"
+        f"fontsdir='{font_dir}':"
+        "shaping=complex"
+    )
+
+    command = [
+        ffmpeg(),
+        "-y",
+        "-i",
+        video_path,
+        "-vf",
+        vf,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
     if result.returncode != 0:
-        error = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError('FFmpeg បញ្ចូល Caption មិនបាន:\n\n' + error[-5000:])
+        error = result.stderr.decode(
+            "utf-8",
+            errors="ignore",
+        )
+
+        raise RuntimeError(
+            "FFmpeg បញ្ចូល Caption មិនបាន:\n\n"
+            + error[-5000:]
+        )
+
     return output_path
 
-def extract_audio(video_path, output_wav):
+
+# =========================================================
+# AUDIO
+# =========================================================
+
+def extract_audio(
+    video_path,
+    output_wav,
+):
     try:
         import av
-        container = av.open(video_path)
-        stream = next((s for s in container.streams if s.type == 'audio'), None)
+
+        container = av.open(
+            video_path
+        )
+
+        stream = next(
+            (
+                s
+                for s in container.streams
+                if s.type == "audio"
+            ),
+            None,
+        )
+
         if stream is None:
-            raise RuntimeError('រកមិនឃើញ Audio ក្នុងវីដេអូ')
-        resampler = av.audio.resampler.AudioResampler(format='s16', layout='mono', rate=16000)
+            raise RuntimeError(
+                "រកមិនឃើញ Audio ក្នុងវីដេអូ"
+            )
+
+        resampler = av.audio.resampler.AudioResampler(
+            format="s16",
+            layout="mono",
+            rate=16000,
+        )
+
         pcm = bytearray()
+
         for frame in container.decode(stream):
-            frames = resampler.resample(frame)
-            if not isinstance(frames, list):
+            frames = resampler.resample(
+                frame
+            )
+
+            if not isinstance(
+                frames,
+                list,
+            ):
                 frames = [frames]
+
             for converted in frames:
                 for plane in converted.planes:
-                    pcm.extend(plane.to_bytes())
+                    pcm.extend(
+                        plane.to_bytes()
+                    )
+
         container.close()
+
         if not pcm:
-            raise RuntimeError('Audio ទទេ')
-        with wave.open(output_wav, 'wb') as wav:
+            raise RuntimeError(
+                "Audio ទទេ"
+            )
+
+        with wave.open(
+            output_wav,
+            "wb",
+        ) as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(16000)
-            wav.writeframes(bytes(pcm))
-        return output_wav
-    except Exception:
-        command = [ffmpeg(), '-y', '-i', video_path, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', output_wav]
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode != 0:
-            error = result.stderr.decode('utf-8', errors='ignore')
-            raise RuntimeError('មិនអាច Extract Audio បាន:\n\n' + error[-4000:])
+            wav.writeframes(
+                bytes(pcm)
+            )
+
         return output_wav
 
-def free_tts(text, output_mp3, language='km'):
+    except Exception:
+        command = [
+            ffmpeg(),
+            "-y",
+            "-i",
+            video_path,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            output_wav,
+        ]
+
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        if result.returncode != 0:
+            error = result.stderr.decode(
+                "utf-8",
+                errors="ignore",
+            )
+
+            raise RuntimeError(
+                "មិនអាច Extract Audio បាន:\n\n"
+                + error[-4000:]
+            )
+
+        return output_wav
+
+
+# =========================================================
+# FREE TTS
+# =========================================================
+
+def free_tts(
+    text,
+    output_mp3,
+    language="km",
+):
     text = text.strip()
+
     if not text:
-        raise ValueError('សូមបញ្ចូលអត្ថបទ')
-    tts = gTTS(text=text, lang=language, slow=False)
+        raise ValueError(
+            "សូមបញ្ចូលអត្ថបទ"
+        )
+
+    tts = gTTS(
+        text=text,
+        lang=language,
+        slow=False,
+    )
+
     tts.save(output_mp3)
+
     return output_mp3
+
+
+# =========================================================
+# VIDEO DOWNLOADER
+# =========================================================
+
 MEDIA_RE = re.compile(
-    r"(?:https?:)?\\?/\\?/[^\"'<>\s]+?\\?(?:u0026|amp;)?[^\"'<>\s]*|"
-    r"https?://[^\"'<>\s]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\"'<>\s]*)?",
+    r"https?://[^\s\"'<>]+?"
+    r"(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)"
+    r"(?:\?[^\s\"'<>]*)?",
     re.I,
 )
 
 
-def normalize_media_url(url):
-    url = url.replace('\\/', '/')
-    url = url.replace('\\u0026', '&').replace('\\u003F', '?').replace('\\u003D', '=')
-    url = url.replace('&amp;', '&')
-    url = url.strip('\\\"\' ,);]')
-    if url.startswith('//'):
-        url = 'https:' + url
-    return url
-
-
-def find_media_urls(text):
-    text = text.replace('\\/', '/').replace('\\u0026', '&').replace('\\u003A', ':')
-    patterns = [
-        r'https?://[^\"\'<>\s]+?\.m3u8(?:\?[^\"\'<>\s]*)?',
-        r'https?://[^\"\'<>\s]+?\.mp4(?:\?[^\"\'<>\s]*)?',
-        r'//[^\"\'<>\s]+?\.m3u8(?:\?[^\"\'<>\s]*)?',
-        r'//[^\"\'<>\s]+?\.mp4(?:\?[^\"\'<>\s]*)?',
-    ]
-    found = []
-    for pattern in patterns:
-        for raw in re.findall(pattern, text, flags=re.I):
-            url = normalize_media_url(raw)
-            if url not in found:
-                found.append(url)
-    return found
-
-
-def video_ok(path):
-    if not os.path.isfile(path) or os.path.getsize(path) < 10000:
-        return False
-    result = subprocess.run(
-        [ffmpeg(), '-v', 'error', '-i', path, '-map', '0:v:0', '-frames:v', '1', '-f', 'null', '-'],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+def find_media_urls(html):
+    return list(
+        dict.fromkeys(
+            MEDIA_RE.findall(html)
+        )
     )
-    return result.returncode == 0
 
 
-def download_direct_video(url, output_path, referer=None):
-    headers = 'User-Agent: Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36\r\n'
-    if referer:
-        headers += f'Referer: {referer}\r\n'
-    result = subprocess.run(
-        [ffmpeg(), '-y', '-hide_banner', '-loglevel', 'error', '-headers', headers, '-i', url,
-         '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', '-movflags', '+faststart', output_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+def download_media_url(
+    url,
+    output_path,
+):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        },
     )
-    if result.returncode != 0 or not video_ok(output_path):
-        error = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError(error[-2200:] or 'Video មិនអាច Download បាន')
-    return os.path.getsize(output_path)
+
+    with urllib.request.urlopen(
+        req,
+        timeout=60,
+    ) as r, open(
+        output_path,
+        "wb",
+    ) as f:
+
+        while True:
+            chunk = r.read(
+                1024 * 1024
+            )
+
+            if not chunk:
+                break
+
+            f.write(chunk)
+
+    return output_path
 
 
-def fetch_html(url, referer=None):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/json,*/*;q=0.8',
-    }
-    if referer:
-        headers['Referer'] = referer
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode('utf-8', errors='ignore'), r.geturl()
+def page_media_download(
+    page_url,
+    output_path,
+):
+    req = urllib.request.Request(
+        page_url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Android 10; Mobile) "
+                "AppleWebKit/537.36 "
+                "Chrome/120 Safari/537.36"
+            )
+        },
+    )
 
+    with urllib.request.urlopen(
+        req,
+        timeout=30,
+    ) as r:
+        html = r.read().decode(
+            "utf-8",
+            errors="ignore",
+        )
 
-def page_media_download(page_url, output_path):
-    html, final_url = fetch_html(page_url)
-    sources = [(page_url, html)]
-
-    # Many modern sites put the actual player URL in JavaScript bundles.
-    scripts = re.findall(r'<script[^>]+src=[\"\']([^\"\']+)', html, flags=re.I)
-    base = final_url
-    for src in scripts[:12]:
+    for url in find_media_urls(html):
         try:
-            full = urllib.parse.urljoin(base, src)
-            js, _ = fetch_html(full, final_url)
-            sources.append((final_url, js))
+            return download_media_url(
+                url,
+                output_path,
+            )
         except Exception:
             pass
 
-    urls = []
-    for _, text in sources:
-        for media in find_media_urls(text):
-            if media not in urls:
-                urls.append(media)
+    raise RuntimeError(
+        "រកមិនឃើញវីដេអូក្នុង Link នេះ"
+    )
 
-    if not urls:
-        raise RuntimeError('រកមិនឃើញ Video Stream (.mp4/.m3u8) ក្នុង HTML/JavaScript របស់ Link នេះទេ។')
 
-    last_error = None
-    for media in urls[:20]:
+def webpage_download(
+    page_url,
+    output_path,
+):
+    if re.search(
+        r"\.(?:mp4|m3u8|webm|mov|mkv)"
+        r"(?:\?|$)",
+        page_url,
+        def webpage_download(
+    page_url,
+    output_path,
+):
+    if re.search(
+        r"\.(?:mp4|m3u8|webm|mov|mkv)"
+        r"(?:\?|$)",
+        page_url,
+        re.I,
+    ):
         try:
-            return download_direct_video(media, output_path, page_url)
-        except Exception as e:
-            last_error = e
-            try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-            except OSError:
-                pass
+            return download_media_url(
+                page_url,
+                output_path,
+            )
+        except Exception:
+            pass
 
-    raise RuntimeError('រកឃើញ Stream ប៉ុន្តែ Server មិនអនុញ្ញាតឱ្យ Download តាម Stream នោះទេ។ ' + str(last_error or ''))
-
-
-def webpage_download(page_url, output_path):
-    page_url = page_url.strip()
-    if not page_url.startswith(('http://', 'https://')):
-        raise RuntimeError('❌ URL មិនត្រឹមត្រូវ។')
-
-    last_error = None
     try:
         import yt_dlp
+
         options = {
-            'format': 'bv*+ba/b',
-            'outtmpl': output_path.replace('.mp4', '.%(ext)s'),
-            'merge_output_format': 'mp4',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'retries': 5,
-            'fragment_retries': 5,
-            'socket_timeout': 30,
-            'ffmpeg_location': ffmpeg(),
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-                'Referer': page_url,
-            },
+            "outtmpl": output_path,
+            "format": "bv*+ba/b",
+            "merge_output_format": "mp4",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "ffmpeg_location": ffmpeg(),
+            "retries": 5,
+            "fragment_retries": 5,
+            "socket_timeout": 30,
         }
+
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(page_url, download=True)
-            prepared = ydl.prepare_filename(info) if info else ''
-            candidates = [output_path, prepared, os.path.splitext(prepared)[0] + '.mp4' if prepared else '']
-            folder = os.path.dirname(output_path)
-            candidates += [os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(('.mp4','.webm','.mkv','.mov'))]
-            existing = [x for x in candidates if x and os.path.exists(x) and os.path.getsize(x) > 10000]
-            if existing:
-                found = max(existing, key=os.path.getmtime)
-                if found != output_path:
-                    os.replace(found, output_path)
-                if video_ok(output_path):
-                    return os.path.getsize(output_path)
-    except Exception as e:
-        last_error = e
+            ydl.download([page_url])
 
-    try:
-        return page_media_download(page_url, output_path)
-    except Exception as e:
-        detail = str(e)[-1800:]
-        if last_error:
-            detail = detail + '\\n\\nyt-dlp: ' + str(last_error)[-900:]
-        raise RuntimeError('❌ Download មិនបាន។ Website នេះប្រើ Video Stream ដែលមិនបង្ហាញដោយផ្ទាល់ដល់ Server ឬត្រូវការ Login/DRM។\\n\\n' + detail) from e
+        if (
+            os.path.isfile(output_path)
+            and os.path.getsize(output_path) > 0
+        ):
+            return output_path
 
+        base = os.path.splitext(
+            output_path
+        )[0]
 
-with st.expander('🌐 បើកវីដេអូក្នុង Tool'):
-    page_url = st.text_input('🔗 ដាក់ Link Website / Video', placeholder='https://...', key='web_video_url')
-    if page_url.strip():
-        st.markdown(f'<iframe src="{page_url.strip()}" style="width:100%;height:520px;border:0;border-radius:12px" allow="autoplay; fullscreen; picture-in-picture"></iframe>', unsafe_allow_html=True)
-        if st.button('⬇️ Download Video', key='tool_download_video'):
-            try:
-                out = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                out.close()
-                with st.spinner('កំពុងទាញវីដេអូមកក្នុង Tool...'):
-                    webpage_download(page_url.strip(), out.name)
-                if not video_ok(out.name):
-                    raise RuntimeError('Link នេះមិនបានផ្តល់ Video file ដែលអាចលេងបានទេ')
-                with open(out.name, 'rb') as f:
-                    video_data = f.read()
-                st.video(video_data)
-                st.download_button('📥 Save MP4', video_data, file_name='smey_video.mp4', mime='video/mp4', key='save_tool_video')
-            except Exception as e:
-                st.error(f'❌ Download មិនបាន: {e}')
+        for ext in (
+            ".mp4",
+            ".webm",
+            ".mkv",
+        ):
+            candidate = base + ext
 
-with st.expander('🎙️ Text → Free Voice'):
-    tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
-    tts_language = st.selectbox('ភាសាសំឡេង', ['Khmer', 'Chinese', 'English'], key='tts_language')
-    tts_lang_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
-    if st.button('🎙️ Generate Voice', key='free_tts_button'):
-        if not tts_text.strip():
-            st.warning('សូមបញ្ចូលអត្ថបទជាមុន')
-        else:
-            try:
-                output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                output.close()
-                with st.spinner('កំពុងបង្កើតសំឡេង Free...'):
-                    free_tts(tts_text, output.name, tts_lang_map[tts_language])
-                with open(output.name, 'rb') as f:
-                    audio_data = f.read()
-                st.audio(audio_data, format='audio/mp3')
-                st.download_button('📥 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
-            except Exception as e:
-                st.error(f'❌ Voice Error: {e}')
-st.divider()
-st.subheader('🎬 Auto Caption')
-api_key = get_api_key()
-source_language = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'])
-target_language = st.selectbox('ភាសា Caption', ['Khmer', 'Chinese', 'No translation'])
-uploaded_video = st.file_uploader('📤 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
-if uploaded_video:
-    st.video(uploaded_video)
-if st.button('🚀 Auto Caption', type='primary'):
-    if not api_key:
-        st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-        st.stop()
-    if not uploaded_video:
-        st.warning('សូម Upload Video ជាមុន')
-        st.stop()
-    client = get_gemini_client(api_key)
-    temp_dir = tempfile.mkdtemp()
-    input_video = os.path.join(temp_dir, 'input.mp4')
-    audio_path = os.path.join(temp_dir, 'audio.wav')
-    ass_path = os.path.join(temp_dir, 'captions.ass')
-    output_video = os.path.join(temp_dir, 'Smey_Auto_Caption.mp4')
-    try:
-        with open(input_video, 'wb') as f:
-            f.write(uploaded_video.getbuffer())
-        with st.status('កំពុងដំណើរការ Auto Caption...', expanded=True) as status:
-            st.write('🎧 1/5 កំពុងយកសំឡេងពីវីដេអូ...')
-            extract_audio(input_video, audio_path)
-            st.write('📝 2/5 កំពុងស្តាប់ និងកំណត់ Word Timing...')
-            transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
-            words = words_from(transcription)
-            if not words:
-                raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
-            groups = make_groups(words)
-            full_text = ' '.join((item['text'] for item in groups))
-            detected = detect_language(full_text)
-            st.write(f'🌐 ភាសាដែលបានរកឃើញ: **{detected}**')
-            st.write('🔄 3/5 កំពុងបកប្រែ Caption...')
-            final_groups = translate_groups(client, groups, target_language)
-            st.write('🎞️ 4/5 កំពុងបង្កើត Caption...')
-            make_ass(final_groups, ass_path)
-            st.write('🔥 5/5 កំពុងបញ្ចូល Caption ទៅក្នុង MP4...')
-            burn(input_video, ass_path, output_video)
-            status.update(label='✅ Auto Caption រួចរាល់!', state='complete')
-        st.success(f'រកឃើញ {len(final_groups)} Caption')
-        st.subheader('📝 Caption Preview')
-        for item in final_groups:
-            st.write(f"`{ass_time(item['start'])} → {ass_time(item['end'])}`  {item['text']}")
-        st.subheader('🎬 Result')
-        st.video(output_video)
-        with open(output_video, 'rb') as f:
-            st.download_button('📥 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
-    except Exception as e:
-        st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
+            if (
+                os.path.isfile(candidate)
+                and os.path.getsize(candidate) > 0
+            ):
+                if candidate != output_path:
+                    os.replace(
+                        candidate,
+                        output_path,
+                    )
+
+                return output_path
+
+    except Exception:
+        pass
+
+    return page_media_download(
+        page_url,
+        output_path,
+    )
+ 
