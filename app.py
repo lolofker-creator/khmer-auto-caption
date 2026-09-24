@@ -212,7 +212,10 @@ with st.expander("📱 APK"):
     with st.expander("👑 Admin"):
         pw=st.text_input("🔐 Admin Password",type="password")
         apk=st.file_uploader("📤 Upload APK",type=["apk"])
-
+apk_name=st.text_input(
+    "✏️ ឈ្មោះ APK ថ្មី",
+    placeholder="ឧ. Smey AI 3.2.1"
+)
         if st.button("⬆️ Upload APK",use_container_width=True):
             if not apk_pw():
                 st.error("សូមកំណត់ APK_ADMIN_PASSWORD ក្នុង Secrets")
@@ -222,7 +225,9 @@ with st.expander("📱 APK"):
                 st.warning("សូមជ្រើស APK")
             else:
                 st.session_state.apk_data=apk.getvalue()
-                st.session_state.apk_name=apk.name
+                name=apk_name.strip() or os.path.splitext(apk.name)[0]
+name=re.sub(r'[\\/:*?"<>|]','',name).strip()
+st.session_state.apk_name=name+".apk"
                 st.rerun()
 
 # Download
