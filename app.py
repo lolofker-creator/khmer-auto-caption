@@ -1,3 +1,4 @@
+
 import os
 import re
 import subprocess
@@ -13,10 +14,10 @@ import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-st.set_page_config(page_title='ðŸ‡°ðŸ‡­ Smey Auto Caption', page_icon='ðŸ‡°ðŸ‡­')
-st.title('ðŸ‡°ðŸ‡­ Smey Auto Caption')
-st.caption('Gemini â†’ Caption â†’ Auto Translate â†’ MP4')
-st.markdown('ðŸ“© **áž‘áŸ†áž“áž¶áž€áŸ‹áž‘áŸ†áž“áž„áž˜áŸ’áž…áž¶ážŸáŸ‹áž€áž˜áŸ’áž˜ážœáž·áž’áž¸:** [Telegram @Smeytk](https://t.me/Smeytk)')
+st.set_page_config(page_title='\U0001f1f0\U0001f1ed Smey Auto Caption', page_icon='\U0001f1f0\U0001f1ed')
+st.title('\U0001f1f0\U0001f1ed Smey Auto Caption')
+st.caption('Gemini \u2192 Caption \u2192 Auto Translate \u2192 MP4')
+st.markdown('\U0001f4e9 **\u1791\u17c6\u1793\u17b6\u1780\u17cb\u1791\u17c6\u1793\u1784\u1798\u17d2\u1785\u17b6\u179f\u17cb\u1780\u1798\u17d2\u1798\u179c\u17b7\u1792\u17b8:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +51,7 @@ def secret(name):
 def supabase(method, path, data=None, ctype=None, timeout=180):
     base, key = secret('SUPABASE_URL').rstrip('/'), secret('SUPABASE_SERVICE_KEY')
     if not base or not key:
-        raise RuntimeError('ážŸáž¼áž˜áž€áŸ†ážŽážáŸ‹ SUPABASE_URL áž“áž·áž„ SUPABASE_SERVICE_KEY áž€áŸ’áž“áž»áž„ Secrets')
+        raise RuntimeError('\u179f\u17bc\u1798\u1780\u17c6\u178e\u178f\u17cb SUPABASE_URL \u1793\u17b7\u1784 SUPABASE_SERVICE_KEY \u1780\u17d2\u1793\u17bb\u1784 Secrets')
     headers = {'apikey': key, 'Authorization': f'Bearer {key}'}
     if ctype: headers['Content-Type'] = ctype
     try:
@@ -67,7 +68,7 @@ def apk_list():
 
 def apk_upload(name, data):
     if len(data) > 50 * 1024 * 1024:
-        raise RuntimeError('APK áž’áŸ†áž–áŸáž€áŸ” áž¢ážáž·áž”ážšáž˜áž¶ 50MB')
+        raise RuntimeError('APK \u1792\u17c6\u1796\u17c1\u1780\u17d4 \u17a2\u178f\u17b7\u1794\u179a\u1798\u17b6 50MB')
     key = secret('SUPABASE_SERVICE_KEY')
     base = secret('SUPABASE_URL').rstrip('/')
     # Create/update private bucket
@@ -135,12 +136,12 @@ def ensure_khmer_font():
         with urllib.request.urlopen(request, timeout=30) as response:
             data = response.read()
         if len(data) < 10000:
-            raise RuntimeError('Font file ážŠáŸ‚áž›áž‘áž¶áž‰áž™áž€áž˜áž€áž˜áž¶áž“áž‘áŸ†áž áŸ†áž˜áž·áž“ážáŸ’ážšáž¹áž˜ážáŸ’ážšáž¼ážœ')
+            raise RuntimeError('Font file \u178a\u17c2\u179b\u1791\u17b6\u1789\u1799\u1780\u1798\u1780\u1798\u17b6\u1793\u1791\u17c6\u17a0\u17c6\u1798\u17b7\u1793\u178f\u17d2\u179a\u17b9\u1798\u178f\u17d2\u179a\u17bc\u179c')
         with open(FONT_PATH, 'wb') as f:
             f.write(data)
         return FONT_PATH
     except Exception as e:
-        raise RuntimeError(f'áž˜áž·áž“áž¢áž¶áž…ážšáž€/áž‘áž¶áž‰áž™áž€ Noto Sans Khmer Font áž”áž¶áž“áŸ” ážŸáž¼áž˜áž–áž·áž“áž·ážáŸ’áž™ Internet ážšáž”ážŸáŸ‹ Streamlit CloudáŸ”\n{e}') from e
+        raise RuntimeError(f'\u1798\u17b7\u1793\u17a2\u17b6\u1785\u179a\u1780/\u1791\u17b6\u1789\u1799\u1780 Noto Sans Khmer Font \u1794\u17b6\u1793\u17d4 \u179f\u17bc\u1798\u1796\u17b7\u1793\u17b7\u178f\u17d2\u1799 Internet \u179a\u1794\u179f\u17cb Streamlit Cloud\u17d4\n{e}') from e
 
 def parse_duration(value):
     if value is None:
@@ -273,9 +274,9 @@ def translate_groups(client, groups, target_language):
                 except Exception:
                     values = []
             if not isinstance(values, list) or len(values) != len(batch):
-                raise RuntimeError('Translation response áž˜áž·áž“ážáŸ’ážšáž¹áž˜ážáŸ’ážšáž¼ážœ')
+                raise RuntimeError('Translation response \u1798\u17b7\u1793\u178f\u17d2\u179a\u17b9\u1798\u178f\u17d2\u179a\u17bc\u179c')
         except Exception as exc:
-            st.warning('âš ï¸ Gemini Translation áž˜áž·áž“áž‘áž¶áž“áŸ‹áž¢áž¶áž…áž”áŸ’ážšáž¾áž”áž¶áž“áŸ” Caption áž“áž¹áž„ážšáž€áŸ’ážŸáž¶áž—áž¶ážŸáž¶ážŠáž¾áž˜ážŸáž˜áŸ’ážšáž¶áž”áŸ‹áž•áŸ’áž“áŸ‚áž€áž“áŸáŸ‡áŸ”')
+            st.warning('\u26a0\ufe0f Gemini Translation \u1798\u17b7\u1793\u1791\u17b6\u1793\u17cb\u17a2\u17b6\u1785\u1794\u17d2\u179a\u17be\u1794\u17b6\u1793\u17d4 Caption \u1793\u17b9\u1784\u179a\u1780\u17d2\u179f\u17b6\u1797\u17b6\u179f\u17b6\u178a\u17be\u1798\u179f\u1798\u17d2\u179a\u17b6\u1794\u17cb\u1795\u17d2\u1793\u17c2\u1780\u1793\u17c1\u17c7\u17d4')
             values = [item['text'] for item in batch]
         for index, item in enumerate(batch):
             translated.append({'text': str(values[index]), 'start': item['start'], 'end': item['end']})
@@ -298,7 +299,7 @@ def burn(video_path, ass_path, output_path):
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
         error = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError('FFmpeg áž”áž‰áŸ’áž…áž¼áž› Caption áž˜áž·áž“áž”áž¶áž“:\n\n' + error[-5000:])
+        raise RuntimeError('FFmpeg \u1794\u1789\u17d2\u1785\u17bc\u179b Caption \u1798\u17b7\u1793\u1794\u17b6\u1793:\n\n' + error[-5000:])
     return output_path
 
 def extract_audio(video_path, output_wav):
@@ -307,7 +308,7 @@ def extract_audio(video_path, output_wav):
         container = av.open(video_path)
         stream = next((s for s in container.streams if s.type == 'audio'), None)
         if stream is None:
-            raise RuntimeError('ážšáž€áž˜áž·áž“ážƒáž¾áž‰ Audio áž€áŸ’áž“áž»áž„ážœáž¸ážŠáŸáž¢áž¼')
+            raise RuntimeError('\u179a\u1780\u1798\u17b7\u1793\u1783\u17be\u1789 Audio \u1780\u17d2\u1793\u17bb\u1784\u179c\u17b8\u178a\u17c1\u17a2\u17bc')
         resampler = av.audio.resampler.AudioResampler(format='s16', layout='mono', rate=16000)
         pcm = bytearray()
         for frame in container.decode(stream):
@@ -319,7 +320,7 @@ def extract_audio(video_path, output_wav):
                     pcm.extend(plane.to_bytes())
         container.close()
         if not pcm:
-            raise RuntimeError('Audio áž‘áž‘áŸ')
+            raise RuntimeError('Audio \u1791\u1791\u17c1')
         with wave.open(output_wav, 'wb') as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
@@ -331,13 +332,13 @@ def extract_audio(video_path, output_wav):
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             error = result.stderr.decode('utf-8', errors='ignore')
-            raise RuntimeError('áž˜áž·áž“áž¢áž¶áž… Extract Audio áž”áž¶áž“:\n\n' + error[-4000:])
+            raise RuntimeError('\u1798\u17b7\u1793\u17a2\u17b6\u1785 Extract Audio \u1794\u17b6\u1793:\n\n' + error[-4000:])
         return output_wav
 
 def free_tts(text, output_mp3, language='km'):
     text = text.strip()
     if not text:
-        raise ValueError('ážŸáž¼áž˜áž”áž‰áŸ’áž…áž¼áž›áž¢ážáŸ’ážáž”áž‘')
+        raise ValueError('\u179f\u17bc\u1798\u1794\u1789\u17d2\u1785\u17bc\u179b\u17a2\u178f\u17d2\u1790\u1794\u1791')
     tts = gTTS(text=text, lang=language, slow=False)
     tts.save(output_mp3)
     return output_mp3
@@ -365,7 +366,7 @@ def page_media_download(page_url, output_path):
             return download_media_url(url, output_path)
         except Exception:
             pass
-    raise RuntimeError('ážšáž€áž˜áž·áž“ážƒáž¾áž‰ážœáž¸ážŠáŸáž¢áž¼áž€áŸ’áž“áž»áž„ Link áž“áŸáŸ‡')
+    raise RuntimeError('\u179a\u1780\u1798\u17b7\u1793\u1783\u17be\u1789\u179c\u17b8\u178a\u17c1\u17a2\u17bc\u1780\u17d2\u1793\u17bb\u1784 Link \u1793\u17c1\u17c7')
 
 def webpage_download(page_url, output_path):
     # Direct video URL
@@ -407,87 +408,87 @@ def webpage_download(page_url, output_path):
     # Public pages containing a media URL
     return page_media_download(page_url, output_path)
 
-with st.expander('â¬‡ï¸ Download Video'):
-    page_url = st.text_input('ážŠáž¶áž€áŸ‹ Link ážœáž¸ážŠáŸáž¢áž¼ áž¬ Page', placeholder='https://...')
-    if st.button('â¬‡ï¸ Download'):
+with st.expander('\u2b07\ufe0f Download Video'):
+    page_url = st.text_input('\u178a\u17b6\u1780\u17cb Link \u179c\u17b8\u178a\u17c1\u17a2\u17bc \u17ac Page', placeholder='https://...')
+    if st.button('\u2b07\ufe0f Download'):
         if not page_url.strip():
-            st.warning('ážŸáž¼áž˜ážŠáž¶áž€áŸ‹ Link áž‡áž¶áž˜áž»áž“')
+            st.warning('\u179f\u17bc\u1798\u178a\u17b6\u1780\u17cb Link \u1787\u17b6\u1798\u17bb\u1793')
         else:
             try:
-                with st.spinner('áž€áŸ†áž–áž»áž„ Download...'):
+                with st.spinner('\u1780\u17c6\u1796\u17bb\u1784 Download...'):
                     output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                     output.close()
                     webpage_download(page_url.strip(), output.name)
-                st.success('âœ… ážšáž½áž…ážšáž¶áž›áŸ‹')
+                st.success('\u2705 \u179a\u17bd\u1785\u179a\u17b6\u179b\u17cb')
                 st.video(output.name)
                 with open(output.name, 'rb') as f:
-                    st.download_button('ðŸ“¥ áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼', f, file_name='download.mp4', mime='video/mp4')
+                    st.download_button('\U0001f4e5 \u1791\u17b6\u1789\u1799\u1780\u179c\u17b8\u178a\u17c1\u17a2\u17bc', f, file_name='download.mp4', mime='video/mp4')
             except Exception:
-                st.error('áž˜áž·áž“áž¢áž¶áž… Download Link áž“áŸáŸ‡áž”áž¶áž“áž‘áŸáŸ” Link áž¢áž¶áž…áž‡áž¶ Private/Login/DRM áž¬áž˜áž·áž“áž˜áž¶áž“ážœáž¸ážŠáŸáž¢áž¼ážŠáŸ‚áž›áž¢áž¶áž…áž‘áž¶áž‰áž™áž€áž”áž¶áž“áŸ”')
+                st.error('\u1798\u17b7\u1793\u17a2\u17b6\u1785 Download Link \u1793\u17c1\u17c7\u1794\u17b6\u1793\u1791\u17c1\u17d4 Link \u17a2\u17b6\u1785\u1787\u17b6 Private/Login/DRM \u17ac\u1798\u17b7\u1793\u1798\u17b6\u1793\u179c\u17b8\u178a\u17c1\u17a2\u17bc\u178a\u17c2\u179b\u17a2\u17b6\u1785\u1791\u17b6\u1789\u1799\u1780\u1794\u17b6\u1793\u17d4')
 
-with st.expander('ðŸŽ™ï¸ Text â†’ Free Voice'):
-    tts_text = st.text_area('áž”áž‰áŸ’áž…áž¼áž›áž¢ážáŸ’ážáž”áž‘', height=120, key='tts_text', placeholder='ážŸážšážŸáŸážšáž¢ážáŸ’ážáž”áž‘ážŠáŸ‚áž›áž…áž„áŸ‹áž”áž˜áŸ’áž›áŸ‚áž„áž‡áž¶ážŸáŸ†áž¡áŸáž„...')
-    tts_language = st.selectbox('áž—áž¶ážŸáž¶ážŸáŸ†áž¡áŸáž„', ['Khmer', 'Chinese', 'English'], key='tts_language')
+with st.expander('\U0001f399\ufe0f Text \u2192 Free Voice'):
+    tts_text = st.text_area('\u1794\u1789\u17d2\u1785\u17bc\u179b\u17a2\u178f\u17d2\u1790\u1794\u1791', height=120, key='tts_text', placeholder='\u179f\u179a\u179f\u17c1\u179a\u17a2\u178f\u17d2\u1790\u1794\u1791\u178a\u17c2\u179b\u1785\u1784\u17cb\u1794\u1798\u17d2\u179b\u17c2\u1784\u1787\u17b6\u179f\u17c6\u17a1\u17c1\u1784...')
+    tts_language = st.selectbox('\u1797\u17b6\u179f\u17b6\u179f\u17c6\u17a1\u17c1\u1784', ['Khmer', 'Chinese', 'English'], key='tts_language')
     tts_lang_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
-    if st.button('ðŸŽ™ï¸ Generate Voice', key='free_tts_button'):
+    if st.button('\U0001f399\ufe0f Generate Voice', key='free_tts_button'):
         if not tts_text.strip():
-            st.warning('ážŸáž¼áž˜áž”áž‰áŸ’áž…áž¼áž›áž¢ážáŸ’ážáž”áž‘áž‡áž¶áž˜áž»áž“')
+            st.warning('\u179f\u17bc\u1798\u1794\u1789\u17d2\u1785\u17bc\u179b\u17a2\u178f\u17d2\u1790\u1794\u1791\u1787\u17b6\u1798\u17bb\u1793')
         else:
             try:
                 output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
                 output.close()
-                with st.spinner('áž€áŸ†áž–áž»áž„áž”áž„áŸ’áž€áž¾ážážŸáŸ†áž¡áŸáž„ Free...'):
+                with st.spinner('\u1780\u17c6\u1796\u17bb\u1784\u1794\u1784\u17d2\u1780\u17be\u178f\u179f\u17c6\u17a1\u17c1\u1784 Free...'):
                     free_tts(tts_text, output.name, tts_lang_map[tts_language])
                 with open(output.name, 'rb') as f:
                     audio_data = f.read()
                 st.audio(audio_data, format='audio/mp3')
-                st.download_button('ðŸ“¥ Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
+                st.download_button('\U0001f4e5 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
             except Exception as e:
-                st.error(f'âŒ Voice Error: {e}')
-with st.expander('ðŸ“± APK'):
+                st.error(f'\u274c Voice Error: {e}')
+with st.expander('\U0001f4f1 APK'):
     try:
         apk_name, apk_data = apk_download()
         if apk_data and apk_name:
-            st.success(f'ðŸ“¦ {apk_name}')
-            st.download_button('â¬‡ï¸ Download APK', apk_data, file_name=apk_name, mime='application/vnd.android.package-archive', use_container_width=True, key='apk_download')
+            st.success(f'\U0001f4e6 {apk_name}')
+            st.download_button('\u2b07\ufe0f Download APK', apk_data, file_name=apk_name, mime='application/vnd.android.package-archive', use_container_width=True, key='apk_download')
         else:
-            st.info('áž˜áž·áž“áž‘áž¶áž“áŸ‹áž˜áž¶áž“ APK')
+            st.info('\u1798\u17b7\u1793\u1791\u17b6\u1793\u17cb\u1798\u17b6\u1793 APK')
     except Exception as e:
-        st.warning(f'âš ï¸ APK Storage: {e}')
+        st.warning(f'\u26a0\ufe0f APK Storage: {e}')
 
-    with st.expander('ðŸ‘‘ Admin'):
-        password=st.text_input('ðŸ” Password',type='password',key='apk_password')
-        uploaded=st.file_uploader('ðŸ“¤ Upload APK',type=['apk'],key='apk_file')
-        custom=st.text_input('âœï¸ ážˆáŸ’áž˜áŸ„áŸ‡ APK',placeholder='áž§. Smey AI VIP 1',key='apk_name_input')
-        if st.button('â¬†ï¸ Upload APK',use_container_width=True,key='apk_upload_button'):
+    with st.expander('\U0001f451 Admin'):
+        password=st.text_input('\U0001f510 Password',type='password',key='apk_password')
+        uploaded=st.file_uploader('\U0001f4e4 Upload APK',type=['apk'],key='apk_file')
+        custom=st.text_input('\u270f\ufe0f \u1788\u17d2\u1798\u17c4\u17c7 APK',placeholder='\u17a7. Smey AI VIP 1',key='apk_name_input')
+        if st.button('\u2b06\ufe0f Upload APK',use_container_width=True,key='apk_upload_button'):
             admin=secret('APK_ADMIN_PASSWORD')
-            if not admin: st.error('ážŸáž¼áž˜áž€áŸ†ážŽážáŸ‹ APK_ADMIN_PASSWORD áž€áŸ’áž“áž»áž„ Secrets')
-            elif password != admin: st.error('âŒ Password áž˜áž·áž“ážáŸ’ážšáž¹áž˜ážáŸ’ážšáž¼ážœ')
-            elif not uploaded: st.warning('âš ï¸ ážŸáž¼áž˜áž‡áŸ’ážšáž¾ážŸ APK')
+            if not admin: st.error('\u179f\u17bc\u1798\u1780\u17c6\u178e\u178f\u17cb APK_ADMIN_PASSWORD \u1780\u17d2\u1793\u17bb\u1784 Secrets')
+            elif password != admin: st.error('\u274c Password \u1798\u17b7\u1793\u178f\u17d2\u179a\u17b9\u1798\u178f\u17d2\u179a\u17bc\u179c')
+            elif not uploaded: st.warning('\u26a0\ufe0f \u179f\u17bc\u1798\u1787\u17d2\u179a\u17be\u179f APK')
             else:
                 name=re.sub(r'[\\/:*?"<>|]','',custom.strip() or os.path.splitext(uploaded.name)[0]).strip() or 'app'
                 if not name.lower().endswith('.apk'): name += '.apk'
                 try:
-                    with st.spinner('áž€áŸ†áž–áž»áž„ Upload APK áž‘áŸ… Supabase...'):
+                    with st.spinner('\u1780\u17c6\u1796\u17bb\u1784 Upload APK \u1791\u17c5 Supabase...'):
                         apk_upload(name,uploaded.getvalue())
-                    st.success(f'âœ… Upload ážšáž½áž…ážšáž¶áž›áŸ‹: {name}')
+                    st.success(f'\u2705 Upload \u179a\u17bd\u1785\u179a\u17b6\u179b\u17cb: {name}')
                     st.rerun()
-                except Exception as e: st.error(f'âŒ Upload APK áž˜áž·áž“áž”áž¶áž“: {e}')
+                except Exception as e: st.error(f'\u274c Upload APK \u1798\u17b7\u1793\u1794\u17b6\u1793: {e}')
 
 st.divider()
-st.subheader('ðŸŽ¬ Auto Caption')
+st.subheader('\U0001f3ac Auto Caption')
 api_key = get_api_key()
-source_language = st.selectbox('áž—áž¶ážŸáž¶ážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜', ['Auto', 'Chinese', 'Khmer'])
-target_language = st.selectbox('áž—áž¶ážŸáž¶ Caption', ['Khmer', 'Chinese', 'No translation'])
-uploaded_video = st.file_uploader('ðŸ“¤ Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
+source_language = st.selectbox('\u1797\u17b6\u179f\u17b6\u179f\u17c6\u17a1\u17c1\u1784\u178a\u17be\u1798', ['Auto', 'Chinese', 'Khmer'])
+target_language = st.selectbox('\u1797\u17b6\u179f\u17b6 Caption', ['Khmer', 'Chinese', 'No translation'])
+uploaded_video = st.file_uploader('\U0001f4e4 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
 if uploaded_video:
     st.video(uploaded_video)
-if st.button('ðŸš€ Auto Caption', type='primary'):
+if st.button('\U0001f680 Auto Caption', type='primary'):
     if not api_key:
-        st.error('áž˜áž·áž“áž‘áž¶áž“áŸ‹áž€áŸ†ážŽážáŸ‹ GEMINI_API_KEY áž€áŸ’áž“áž»áž„ Streamlit Secrets áž‘áŸáŸ”')
+        st.error('\u1798\u17b7\u1793\u1791\u17b6\u1793\u17cb\u1780\u17c6\u178e\u178f\u17cb GEMINI_API_KEY \u1780\u17d2\u1793\u17bb\u1784 Streamlit Secrets \u1791\u17c1\u17d4')
         st.stop()
     if not uploaded_video:
-        st.warning('ážŸáž¼áž˜ Upload Video áž‡áž¶áž˜áž»áž“')
+        st.warning('\u179f\u17bc\u1798 Upload Video \u1787\u17b6\u1798\u17bb\u1793')
         st.stop()
     client = get_gemini_client(api_key)
     temp_dir = tempfile.mkdtemp()
@@ -498,32 +499,32 @@ if st.button('ðŸš€ Auto Caption', type='primary'):
     try:
         with open(input_video, 'wb') as f:
             f.write(uploaded_video.getbuffer())
-        with st.status('áž€áŸ†áž–áž»áž„ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš Auto Caption...', expanded=True) as status:
-            st.write('ðŸŽ§ 1/5 áž€áŸ†áž–áž»áž„áž™áž€ážŸáŸ†áž¡áŸáž„áž–áž¸ážœáž¸ážŠáŸáž¢áž¼...')
+        with st.status('\u1780\u17c6\u1796\u17bb\u1784\u178a\u17c6\u178e\u17be\u179a\u1780\u17b6\u179a Auto Caption...', expanded=True) as status:
+            st.write('\U0001f3a7 1/5 \u1780\u17c6\u1796\u17bb\u1784\u1799\u1780\u179f\u17c6\u17a1\u17c1\u1784\u1796\u17b8\u179c\u17b8\u178a\u17c1\u17a2\u17bc...')
             extract_audio(input_video, audio_path)
-            st.write('ðŸ“ 2/5 áž€áŸ†áž–áž»áž„ážŸáŸ’ážáž¶áž”áŸ‹ áž“áž·áž„áž€áŸ†ážŽážáŸ‹ Word Timing...')
+            st.write('\U0001f4dd 2/5 \u1780\u17c6\u1796\u17bb\u1784\u179f\u17d2\u178f\u17b6\u1794\u17cb \u1793\u17b7\u1784\u1780\u17c6\u178e\u178f\u17cb Word Timing...')
             transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
             words = words_from(transcription)
             if not words:
-                raise RuntimeError('Gemini áž˜áž·áž“áž”áž¶áž“áž•áŸ’ážáž›áŸ‹ Word TimingáŸ” ážŸáž¼áž˜ážŸáž¶áž€áž›áŸ’áž”áž„áž˜áŸ’ážáž„áž‘áŸ€ážáŸ”')
+                raise RuntimeError('Gemini \u1798\u17b7\u1793\u1794\u17b6\u1793\u1795\u17d2\u178f\u179b\u17cb Word Timing\u17d4 \u179f\u17bc\u1798\u179f\u17b6\u1780\u179b\u17d2\u1794\u1784\u1798\u17d2\u178f\u1784\u1791\u17c0\u178f\u17d4')
             groups = make_groups(words)
             full_text = ' '.join((item['text'] for item in groups))
             detected = detect_language(full_text)
-            st.write(f'ðŸŒ áž—áž¶ážŸáž¶ážŠáŸ‚áž›áž”áž¶áž“ážšáž€ážƒáž¾áž‰: **{detected}**')
-            st.write('ðŸ”„ 3/5 áž€áŸ†áž–áž»áž„áž”áž€áž”áŸ’ážšáŸ‚ Caption...')
+            st.write(f'\U0001f310 \u1797\u17b6\u179f\u17b6\u178a\u17c2\u179b\u1794\u17b6\u1793\u179a\u1780\u1783\u17be\u1789: **{detected}**')
+            st.write('\U0001f504 3/5 \u1780\u17c6\u1796\u17bb\u1784\u1794\u1780\u1794\u17d2\u179a\u17c2 Caption...')
             final_groups = translate_groups(client, groups, target_language)
-            st.write('ðŸŽžï¸ 4/5 áž€áŸ†áž–áž»áž„áž”áž„áŸ’áž€áž¾áž Caption...')
+            st.write('\U0001f39e\ufe0f 4/5 \u1780\u17c6\u1796\u17bb\u1784\u1794\u1784\u17d2\u1780\u17be\u178f Caption...')
             make_ass(final_groups, ass_path)
-            st.write('ðŸ”¥ 5/5 áž€áŸ†áž–áž»áž„áž”áž‰áŸ’áž…áž¼áž› Caption áž‘áŸ…áž€áŸ’áž“áž»áž„ MP4...')
+            st.write('\U0001f525 5/5 \u1780\u17c6\u1796\u17bb\u1784\u1794\u1789\u17d2\u1785\u17bc\u179b Caption \u1791\u17c5\u1780\u17d2\u1793\u17bb\u1784 MP4...')
             burn(input_video, ass_path, output_video)
-            status.update(label='âœ… Auto Caption ážšáž½áž…ážšáž¶áž›áŸ‹!', state='complete')
-        st.success(f'ážšáž€ážƒáž¾áž‰ {len(final_groups)} Caption')
-        st.subheader('ðŸ“ Caption Preview')
+            status.update(label='\u2705 Auto Caption \u179a\u17bd\u1785\u179a\u17b6\u179b\u17cb!', state='complete')
+        st.success(f'\u179a\u1780\u1783\u17be\u1789 {len(final_groups)} Caption')
+        st.subheader('\U0001f4dd Caption Preview')
         for item in final_groups:
-            st.write(f"`{ass_time(item['start'])} â†’ {ass_time(item['end'])}`  {item['text']}")
-        st.subheader('ðŸŽ¬ Result')
+            st.write(f"`{ass_time(item['start'])} \u2192 {ass_time(item['end'])}`  {item['text']}")
+        st.subheader('\U0001f3ac Result')
         st.video(output_video)
         with open(output_video, 'rb') as f:
-            st.download_button('ðŸ“¥ Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
+            st.download_button('\U0001f4e5 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
     except Exception as e:
-        st.error(f'âŒ Auto Caption áž˜áž·áž“áž¢áž¶áž…áž”áž‰áŸ’áž…áž”áŸ‹áž”áž¶áž“: {e}')
+        st.error(f'\u274c Auto Caption \u1798\u17b7\u1793\u17a2\u17b6\u1785\u1794\u1789\u17d2\u1785\u1794\u17cb\u1794\u17b6\u1793: {e}')
