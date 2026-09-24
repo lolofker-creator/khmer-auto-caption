@@ -65,7 +65,7 @@ def apk_upload(name, data):
         raise RuntimeError('APK ធំពេក។ អតិបរមា 50MB')
     key = secret('SUPABASE_SERVICE_KEY')
     base = secret('SUPABASE_URL').rstrip('/')
-    settings = json.dumps({'id':'apk','name':'apk','public':False,'file_size_limit':50*1024*1024,'allowed_mime_types':['application/vnd.android.package-archive']}).encode()
+    settings = json.dumps({'id':'apk','name':'apk','public':False,'file_size_limit':50*1024*1024,'allowed_mime_types':['application/vnd.android.package-archive','text/plain']}).encode()
     try:
         supabase('POST','/storage/v1/bucket',settings,'application/json')
     except RuntimeError as e:
