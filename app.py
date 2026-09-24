@@ -1,4 +1,3 @@
-
 import os
 import re
 import subprocess
@@ -14,10 +13,10 @@ import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-st.set_page_config(page_title='\U0001f1f0\U0001f1ed Smey Auto Caption', page_icon='\U0001f1f0\U0001f1ed')
-st.title('\U0001f1f0\U0001f1ed Smey Auto Caption')
-st.caption('Gemini \u2192 Caption \u2192 Auto Translate \u2192 MP4')
-st.markdown('\U0001f4e9 **\u1791\u17c6\u1793\u17b6\u1780\u17cb\u1791\u17c6\u1793\u1784\u1798\u17d2\u1785\u17b6\u179f\u17cb\u1780\u1798\u17d2\u1798\u179c\u17b7\u1792\u17b8:** [Telegram @Smeytk](https://t.me/Smeytk)')
+st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭')
+st.title('🇰🇭 Smey Auto Caption')
+st.caption('Gemini → Caption → Auto Translate → MP4')
+st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,7 +50,7 @@ def secret(name):
 def supabase(method, path, data=None, ctype=None, timeout=180):
     base, key = secret('SUPABASE_URL').rstrip('/'), secret('SUPABASE_SERVICE_KEY')
     if not base or not key:
-        raise RuntimeError('\u179f\u17bc\u1798\u1780\u17c6\u178e\u178f\u17cb SUPABASE_URL \u1793\u17b7\u1784 SUPABASE_SERVICE_KEY \u1780\u17d2\u1793\u17bb\u1784 Secrets')
+        raise RuntimeError('សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY ក្នុង Secrets')
     headers = {'apikey': key, 'Authorization': f'Bearer {key}'}
     if ctype: headers['Content-Type'] = ctype
     try:
@@ -61,17 +60,11 @@ def supabase(method, path, data=None, ctype=None, timeout=180):
         msg = e.read().decode('utf-8', errors='ignore')
         raise RuntimeError(f'Supabase HTTP {e.code}: {msg or e.reason}') from e
 
-def apk_list():
-    body = json.dumps({'prefix':'','limit':100,'offset':0,'sortBy':{'column':'name','order':'asc'}}).encode()
-    raw = supabase('POST', '/storage/v1/object/list/apk', body, 'application/json')
-    return [x['name'] for x in json.loads(raw or b'[]') if x.get('name','').lower().endswith('.apk')]
-
 def apk_upload(name, data):
     if len(data) > 50 * 1024 * 1024:
-        raise RuntimeError('APK \u1792\u17c6\u1796\u17c1\u1780\u17d4 \u17a2\u178f\u17b7\u1794\u179a\u1798\u17b6 50MB')
+        raise RuntimeError('APK ធំពេក។ អតិបរមា 50MB')
     key = secret('SUPABASE_SERVICE_KEY')
     base = secret('SUPABASE_URL').rstrip('/')
-    # Create/update private bucket
     settings = json.dumps({'id':'apk','name':'apk','public':False,'file_size_limit':50*1024*1024,'allowed_mime_types':['application/vnd.android.package-archive']}).encode()
     try:
         supabase('POST','/storage/v1/bucket',settings,'application/json')
@@ -79,28 +72,47 @@ def apk_upload(name, data):
         if '409' in str(e) or 'already exists' in str(e).lower() or 'duplicate' in str(e).lower():
             try: supabase('PUT','/storage/v1/bucket/apk',settings,'application/json')
             except Exception: pass
-        else: raise
-    old = apk_list()
-    path = urllib.parse.quote(name, safe='')
-    req = urllib.request.Request(base + f'/storage/v1/object/apk/{path}', data=data, headers={
-        'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/vnd.android.package-archive','x-upsert':'true'
+        else:
+            raise
+
+    # Supabase Storage object keys do not accept the Khmer display name here.
+    # Keep the real filename separately, while storing the APK under an ASCII key.
+    req = urllib.request.Request(base + '/storage/v1/object/apk/current.apk', data=data, headers={
+        'apikey':key,'Authorization':f'Bearer {key}',
+        'Content-Type':'application/vnd.android.package-archive','x-upsert':'true'
     }, method='POST')
     try:
         with urllib.request.urlopen(req, timeout=180): pass
     except urllib.error.HTTPError as e:
         msg=e.read().decode('utf-8',errors='ignore')
         raise RuntimeError(f'Supabase Upload HTTP {e.code}: {msg or e.reason}') from e
-    for old_name in old:
-        if old_name != name:
-            body=json.dumps({'prefixes':[old_name]}).encode()
-            supabase('DELETE','/storage/v1/object/apk',body,'application/json')
+
+    # Save the user-facing APK name in a small UTF-8 text object.
+    name_req = urllib.request.Request(base + '/storage/v1/object/apk/current_name.txt', data=name.encode('utf-8'), headers={
+        'apikey':key,'Authorization':f'Bearer {key}',
+        'Content-Type':'text/plain; charset=utf-8','x-upsert':'true'
+    }, method='POST')
+    try:
+        with urllib.request.urlopen(name_req, timeout=30): pass
+    except urllib.error.HTTPError as e:
+        msg=e.read().decode('utf-8',errors='ignore')
+        raise RuntimeError(f'Supabase Name HTTP {e.code}: {msg or e.reason}') from e
 
 def apk_download():
-    names=apk_list()
-    if not names: return None,None
-    name=names[0]
-    path=urllib.parse.quote(name,safe='')
-    return name, supabase('GET',f'/storage/v1/object/apk/{path}',timeout=180)
+    key = secret('SUPABASE_SERVICE_KEY')
+    base = secret('SUPABASE_URL').rstrip('/')
+    if not key or not base:
+        raise RuntimeError('សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY ក្នុង Secrets')
+    try:
+        raw_name = supabase('GET','/storage/v1/object/apk/current_name.txt',timeout=30)
+        name = raw_name.decode('utf-8').strip() or 'app.apk'
+    except Exception:
+        name = 'app.apk'
+    try:
+        data = supabase('GET','/storage/v1/object/apk/current.apk',timeout=180)
+    except urllib.error.HTTPError:
+        return None, None
+    return name, data
 
 def ass_time(value):
     value = max(0.0, float(value))
@@ -136,12 +148,12 @@ def ensure_khmer_font():
         with urllib.request.urlopen(request, timeout=30) as response:
             data = response.read()
         if len(data) < 10000:
-            raise RuntimeError('Font file \u178a\u17c2\u179b\u1791\u17b6\u1789\u1799\u1780\u1798\u1780\u1798\u17b6\u1793\u1791\u17c6\u17a0\u17c6\u1798\u17b7\u1793\u178f\u17d2\u179a\u17b9\u1798\u178f\u17d2\u179a\u17bc\u179c')
+            raise RuntimeError('Font file ដែលទាញយកមកមានទំហំមិនត្រឹមត្រូវ')
         with open(FONT_PATH, 'wb') as f:
             f.write(data)
         return FONT_PATH
     except Exception as e:
-        raise RuntimeError(f'\u1798\u17b7\u1793\u17a2\u17b6\u1785\u179a\u1780/\u1791\u17b6\u1789\u1799\u1780 Noto Sans Khmer Font \u1794\u17b6\u1793\u17d4 \u179f\u17bc\u1798\u1796\u17b7\u1793\u17b7\u178f\u17d2\u1799 Internet \u179a\u1794\u179f\u17cb Streamlit Cloud\u17d4\n{e}') from e
+        raise RuntimeError(f'មិនអាចរក/ទាញយក Noto Sans Khmer Font បាន។ សូមពិនិត្យ Internet របស់ Streamlit Cloud។\n{e}') from e
 
 def parse_duration(value):
     if value is None:
@@ -274,9 +286,9 @@ def translate_groups(client, groups, target_language):
                 except Exception:
                     values = []
             if not isinstance(values, list) or len(values) != len(batch):
-                raise RuntimeError('Translation response \u1798\u17b7\u1793\u178f\u17d2\u179a\u17b9\u1798\u178f\u17d2\u179a\u17bc\u179c')
+                raise RuntimeError('Translation response មិនត្រឹមត្រូវ')
         except Exception as exc:
-            st.warning('\u26a0\ufe0f Gemini Translation \u1798\u17b7\u1793\u1791\u17b6\u1793\u17cb\u17a2\u17b6\u1785\u1794\u17d2\u179a\u17be\u1794\u17b6\u1793\u17d4 Caption \u1793\u17b9\u1784\u179a\u1780\u17d2\u179f\u17b6\u1797\u17b6\u179f\u17b6\u178a\u17be\u1798\u179f\u1798\u17d2\u179a\u17b6\u1794\u17cb\u1795\u17d2\u1793\u17c2\u1780\u1793\u17c1\u17c7\u17d4')
+            st.warning('⚠️ Gemini Translation មិនទាន់អាចប្រើបាន។ Caption នឹងរក្សាភាសាដើមសម្រាប់ផ្នែកនេះ។')
             values = [item['text'] for item in batch]
         for index, item in enumerate(batch):
             translated.append({'text': str(values[index]), 'start': item['start'], 'end': item['end']})
@@ -299,7 +311,7 @@ def burn(video_path, ass_path, output_path):
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
         error = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError('FFmpeg \u1794\u1789\u17d2\u1785\u17bc\u179b Caption \u1798\u17b7\u1793\u1794\u17b6\u1793:\n\n' + error[-5000:])
+        raise RuntimeError('FFmpeg បញ្ចូល Caption មិនបាន:\n\n' + error[-5000:])
     return output_path
 
 def extract_audio(video_path, output_wav):
@@ -308,7 +320,7 @@ def extract_audio(video_path, output_wav):
         container = av.open(video_path)
         stream = next((s for s in container.streams if s.type == 'audio'), None)
         if stream is None:
-            raise RuntimeError('\u179a\u1780\u1798\u17b7\u1793\u1783\u17be\u1789 Audio \u1780\u17d2\u1793\u17bb\u1784\u179c\u17b8\u178a\u17c1\u17a2\u17bc')
+            raise RuntimeError('រកមិនឃើញ Audio ក្នុងវីដេអូ')
         resampler = av.audio.resampler.AudioResampler(format='s16', layout='mono', rate=16000)
         pcm = bytearray()
         for frame in container.decode(stream):
@@ -320,7 +332,7 @@ def extract_audio(video_path, output_wav):
                     pcm.extend(plane.to_bytes())
         container.close()
         if not pcm:
-            raise RuntimeError('Audio \u1791\u1791\u17c1')
+            raise RuntimeError('Audio ទទេ')
         with wave.open(output_wav, 'wb') as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
@@ -332,13 +344,13 @@ def extract_audio(video_path, output_wav):
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             error = result.stderr.decode('utf-8', errors='ignore')
-            raise RuntimeError('\u1798\u17b7\u1793\u17a2\u17b6\u1785 Extract Audio \u1794\u17b6\u1793:\n\n' + error[-4000:])
+            raise RuntimeError('មិនអាច Extract Audio បាន:\n\n' + error[-4000:])
         return output_wav
 
 def free_tts(text, output_mp3, language='km'):
     text = text.strip()
     if not text:
-        raise ValueError('\u179f\u17bc\u1798\u1794\u1789\u17d2\u1785\u17bc\u179b\u17a2\u178f\u17d2\u1790\u1794\u1791')
+        raise ValueError('សូមបញ្ចូលអត្ថបទ')
     tts = gTTS(text=text, lang=language, slow=False)
     tts.save(output_mp3)
     return output_mp3
@@ -366,7 +378,7 @@ def page_media_download(page_url, output_path):
             return download_media_url(url, output_path)
         except Exception:
             pass
-    raise RuntimeError('\u179a\u1780\u1798\u17b7\u1793\u1783\u17be\u1789\u179c\u17b8\u178a\u17c1\u17a2\u17bc\u1780\u17d2\u1793\u17bb\u1784 Link \u1793\u17c1\u17c7')
+    raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
 
 def webpage_download(page_url, output_path):
     # Direct video URL
@@ -408,87 +420,87 @@ def webpage_download(page_url, output_path):
     # Public pages containing a media URL
     return page_media_download(page_url, output_path)
 
-with st.expander('\u2b07\ufe0f Download Video'):
-    page_url = st.text_input('\u178a\u17b6\u1780\u17cb Link \u179c\u17b8\u178a\u17c1\u17a2\u17bc \u17ac Page', placeholder='https://...')
-    if st.button('\u2b07\ufe0f Download'):
+with st.expander('⬇️ Download Video'):
+    page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
+    if st.button('⬇️ Download'):
         if not page_url.strip():
-            st.warning('\u179f\u17bc\u1798\u178a\u17b6\u1780\u17cb Link \u1787\u17b6\u1798\u17bb\u1793')
+            st.warning('សូមដាក់ Link ជាមុន')
         else:
             try:
-                with st.spinner('\u1780\u17c6\u1796\u17bb\u1784 Download...'):
+                with st.spinner('កំពុង Download...'):
                     output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                     output.close()
                     webpage_download(page_url.strip(), output.name)
-                st.success('\u2705 \u179a\u17bd\u1785\u179a\u17b6\u179b\u17cb')
+                st.success('✅ រួចរាល់')
                 st.video(output.name)
                 with open(output.name, 'rb') as f:
-                    st.download_button('\U0001f4e5 \u1791\u17b6\u1789\u1799\u1780\u179c\u17b8\u178a\u17c1\u17a2\u17bc', f, file_name='download.mp4', mime='video/mp4')
+                    st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
             except Exception:
-                st.error('\u1798\u17b7\u1793\u17a2\u17b6\u1785 Download Link \u1793\u17c1\u17c7\u1794\u17b6\u1793\u1791\u17c1\u17d4 Link \u17a2\u17b6\u1785\u1787\u17b6 Private/Login/DRM \u17ac\u1798\u17b7\u1793\u1798\u17b6\u1793\u179c\u17b8\u178a\u17c1\u17a2\u17bc\u178a\u17c2\u179b\u17a2\u17b6\u1785\u1791\u17b6\u1789\u1799\u1780\u1794\u17b6\u1793\u17d4')
+                st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
 
-with st.expander('\U0001f399\ufe0f Text \u2192 Free Voice'):
-    tts_text = st.text_area('\u1794\u1789\u17d2\u1785\u17bc\u179b\u17a2\u178f\u17d2\u1790\u1794\u1791', height=120, key='tts_text', placeholder='\u179f\u179a\u179f\u17c1\u179a\u17a2\u178f\u17d2\u1790\u1794\u1791\u178a\u17c2\u179b\u1785\u1784\u17cb\u1794\u1798\u17d2\u179b\u17c2\u1784\u1787\u17b6\u179f\u17c6\u17a1\u17c1\u1784...')
-    tts_language = st.selectbox('\u1797\u17b6\u179f\u17b6\u179f\u17c6\u17a1\u17c1\u1784', ['Khmer', 'Chinese', 'English'], key='tts_language')
+with st.expander('🎙️ Text → Free Voice'):
+    tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
+    tts_language = st.selectbox('ភាសាសំឡេង', ['Khmer', 'Chinese', 'English'], key='tts_language')
     tts_lang_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
-    if st.button('\U0001f399\ufe0f Generate Voice', key='free_tts_button'):
+    if st.button('🎙️ Generate Voice', key='free_tts_button'):
         if not tts_text.strip():
-            st.warning('\u179f\u17bc\u1798\u1794\u1789\u17d2\u1785\u17bc\u179b\u17a2\u178f\u17d2\u1790\u1794\u1791\u1787\u17b6\u1798\u17bb\u1793')
+            st.warning('សូមបញ្ចូលអត្ថបទជាមុន')
         else:
             try:
                 output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
                 output.close()
-                with st.spinner('\u1780\u17c6\u1796\u17bb\u1784\u1794\u1784\u17d2\u1780\u17be\u178f\u179f\u17c6\u17a1\u17c1\u1784 Free...'):
+                with st.spinner('កំពុងបង្កើតសំឡេង Free...'):
                     free_tts(tts_text, output.name, tts_lang_map[tts_language])
                 with open(output.name, 'rb') as f:
                     audio_data = f.read()
                 st.audio(audio_data, format='audio/mp3')
-                st.download_button('\U0001f4e5 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
+                st.download_button('📥 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
             except Exception as e:
-                st.error(f'\u274c Voice Error: {e}')
-with st.expander('\U0001f4f1 APK'):
+                st.error(f'❌ Voice Error: {e}')
+with st.expander('📱 APK'):
     try:
         apk_name, apk_data = apk_download()
         if apk_data and apk_name:
-            st.success(f'\U0001f4e6 {apk_name}')
-            st.download_button('\u2b07\ufe0f Download APK', apk_data, file_name=apk_name, mime='application/vnd.android.package-archive', use_container_width=True, key='apk_download')
+            st.success(f'📦 {apk_name}')
+            st.download_button('⬇️ Download APK', apk_data, file_name=apk_name, mime='application/vnd.android.package-archive', use_container_width=True, key='apk_download')
         else:
-            st.info('\u1798\u17b7\u1793\u1791\u17b6\u1793\u17cb\u1798\u17b6\u1793 APK')
+            st.info('មិនទាន់មាន APK')
     except Exception as e:
-        st.warning(f'\u26a0\ufe0f APK Storage: {e}')
+        st.warning(f'⚠️ APK Storage: {e}')
 
-    with st.expander('\U0001f451 Admin'):
-        password=st.text_input('\U0001f510 Password',type='password',key='apk_password')
-        uploaded=st.file_uploader('\U0001f4e4 Upload APK',type=['apk'],key='apk_file')
-        custom=st.text_input('\u270f\ufe0f \u1788\u17d2\u1798\u17c4\u17c7 APK',placeholder='\u17a7. Smey AI VIP 1',key='apk_name_input')
-        if st.button('\u2b06\ufe0f Upload APK',use_container_width=True,key='apk_upload_button'):
+    with st.expander('👑 Admin'):
+        password=st.text_input('🔐 Password',type='password',key='apk_password')
+        uploaded=st.file_uploader('📤 Upload APK',type=['apk'],key='apk_file')
+        custom=st.text_input('✏️ ឈ្មោះ APK',placeholder='ឧ. Smey AI VIP 1',key='apk_name_input')
+        if st.button('⬆️ Upload APK',use_container_width=True,key='apk_upload_button'):
             admin=secret('APK_ADMIN_PASSWORD')
-            if not admin: st.error('\u179f\u17bc\u1798\u1780\u17c6\u178e\u178f\u17cb APK_ADMIN_PASSWORD \u1780\u17d2\u1793\u17bb\u1784 Secrets')
-            elif password != admin: st.error('\u274c Password \u1798\u17b7\u1793\u178f\u17d2\u179a\u17b9\u1798\u178f\u17d2\u179a\u17bc\u179c')
-            elif not uploaded: st.warning('\u26a0\ufe0f \u179f\u17bc\u1798\u1787\u17d2\u179a\u17be\u179f APK')
+            if not admin: st.error('សូមកំណត់ APK_ADMIN_PASSWORD ក្នុង Secrets')
+            elif password != admin: st.error('❌ Password មិនត្រឹមត្រូវ')
+            elif not uploaded: st.warning('⚠️ សូមជ្រើស APK')
             else:
                 name=re.sub(r'[\\/:*?"<>|]','',custom.strip() or os.path.splitext(uploaded.name)[0]).strip() or 'app'
                 if not name.lower().endswith('.apk'): name += '.apk'
                 try:
-                    with st.spinner('\u1780\u17c6\u1796\u17bb\u1784 Upload APK \u1791\u17c5 Supabase...'):
+                    with st.spinner('កំពុង Upload APK ទៅ Supabase...'):
                         apk_upload(name,uploaded.getvalue())
-                    st.success(f'\u2705 Upload \u179a\u17bd\u1785\u179a\u17b6\u179b\u17cb: {name}')
+                    st.success(f'✅ Upload រួចរាល់: {name}')
                     st.rerun()
-                except Exception as e: st.error(f'\u274c Upload APK \u1798\u17b7\u1793\u1794\u17b6\u1793: {e}')
+                except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
 
 st.divider()
-st.subheader('\U0001f3ac Auto Caption')
+st.subheader('🎬 Auto Caption')
 api_key = get_api_key()
-source_language = st.selectbox('\u1797\u17b6\u179f\u17b6\u179f\u17c6\u17a1\u17c1\u1784\u178a\u17be\u1798', ['Auto', 'Chinese', 'Khmer'])
-target_language = st.selectbox('\u1797\u17b6\u179f\u17b6 Caption', ['Khmer', 'Chinese', 'No translation'])
-uploaded_video = st.file_uploader('\U0001f4e4 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
+source_language = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'])
+target_language = st.selectbox('ភាសា Caption', ['Khmer', 'Chinese', 'No translation'])
+uploaded_video = st.file_uploader('📤 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
 if uploaded_video:
     st.video(uploaded_video)
-if st.button('\U0001f680 Auto Caption', type='primary'):
+if st.button('🚀 Auto Caption', type='primary'):
     if not api_key:
-        st.error('\u1798\u17b7\u1793\u1791\u17b6\u1793\u17cb\u1780\u17c6\u178e\u178f\u17cb GEMINI_API_KEY \u1780\u17d2\u1793\u17bb\u1784 Streamlit Secrets \u1791\u17c1\u17d4')
+        st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
         st.stop()
     if not uploaded_video:
-        st.warning('\u179f\u17bc\u1798 Upload Video \u1787\u17b6\u1798\u17bb\u1793')
+        st.warning('សូម Upload Video ជាមុន')
         st.stop()
     client = get_gemini_client(api_key)
     temp_dir = tempfile.mkdtemp()
@@ -499,32 +511,32 @@ if st.button('\U0001f680 Auto Caption', type='primary'):
     try:
         with open(input_video, 'wb') as f:
             f.write(uploaded_video.getbuffer())
-        with st.status('\u1780\u17c6\u1796\u17bb\u1784\u178a\u17c6\u178e\u17be\u179a\u1780\u17b6\u179a Auto Caption...', expanded=True) as status:
-            st.write('\U0001f3a7 1/5 \u1780\u17c6\u1796\u17bb\u1784\u1799\u1780\u179f\u17c6\u17a1\u17c1\u1784\u1796\u17b8\u179c\u17b8\u178a\u17c1\u17a2\u17bc...')
+        with st.status('កំពុងដំណើរការ Auto Caption...', expanded=True) as status:
+            st.write('🎧 1/5 កំពុងយកសំឡេងពីវីដេអូ...')
             extract_audio(input_video, audio_path)
-            st.write('\U0001f4dd 2/5 \u1780\u17c6\u1796\u17bb\u1784\u179f\u17d2\u178f\u17b6\u1794\u17cb \u1793\u17b7\u1784\u1780\u17c6\u178e\u178f\u17cb Word Timing...')
+            st.write('📝 2/5 កំពុងស្តាប់ និងកំណត់ Word Timing...')
             transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
             words = words_from(transcription)
             if not words:
-                raise RuntimeError('Gemini \u1798\u17b7\u1793\u1794\u17b6\u1793\u1795\u17d2\u178f\u179b\u17cb Word Timing\u17d4 \u179f\u17bc\u1798\u179f\u17b6\u1780\u179b\u17d2\u1794\u1784\u1798\u17d2\u178f\u1784\u1791\u17c0\u178f\u17d4')
+                raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
             groups = make_groups(words)
             full_text = ' '.join((item['text'] for item in groups))
             detected = detect_language(full_text)
-            st.write(f'\U0001f310 \u1797\u17b6\u179f\u17b6\u178a\u17c2\u179b\u1794\u17b6\u1793\u179a\u1780\u1783\u17be\u1789: **{detected}**')
-            st.write('\U0001f504 3/5 \u1780\u17c6\u1796\u17bb\u1784\u1794\u1780\u1794\u17d2\u179a\u17c2 Caption...')
+            st.write(f'🌐 ភាសាដែលបានរកឃើញ: **{detected}**')
+            st.write('🔄 3/5 កំពុងបកប្រែ Caption...')
             final_groups = translate_groups(client, groups, target_language)
-            st.write('\U0001f39e\ufe0f 4/5 \u1780\u17c6\u1796\u17bb\u1784\u1794\u1784\u17d2\u1780\u17be\u178f Caption...')
+            st.write('🎞️ 4/5 កំពុងបង្កើត Caption...')
             make_ass(final_groups, ass_path)
-            st.write('\U0001f525 5/5 \u1780\u17c6\u1796\u17bb\u1784\u1794\u1789\u17d2\u1785\u17bc\u179b Caption \u1791\u17c5\u1780\u17d2\u1793\u17bb\u1784 MP4...')
+            st.write('🔥 5/5 កំពុងបញ្ចូល Caption ទៅក្នុង MP4...')
             burn(input_video, ass_path, output_video)
-            status.update(label='\u2705 Auto Caption \u179a\u17bd\u1785\u179a\u17b6\u179b\u17cb!', state='complete')
-        st.success(f'\u179a\u1780\u1783\u17be\u1789 {len(final_groups)} Caption')
-        st.subheader('\U0001f4dd Caption Preview')
+            status.update(label='✅ Auto Caption រួចរាល់!', state='complete')
+        st.success(f'រកឃើញ {len(final_groups)} Caption')
+        st.subheader('📝 Caption Preview')
         for item in final_groups:
-            st.write(f"`{ass_time(item['start'])} \u2192 {ass_time(item['end'])}`  {item['text']}")
-        st.subheader('\U0001f3ac Result')
+            st.write(f"`{ass_time(item['start'])} → {ass_time(item['end'])}`  {item['text']}")
+        st.subheader('🎬 Result')
         st.video(output_video)
         with open(output_video, 'rb') as f:
-            st.download_button('\U0001f4e5 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
+            st.download_button('📥 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
     except Exception as e:
-        st.error(f'\u274c Auto Caption \u1798\u17b7\u1793\u17a2\u17b6\u1785\u1794\u1789\u17d2\u1785\u1794\u17cb\u1794\u17b6\u1793: {e}')
+        st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
