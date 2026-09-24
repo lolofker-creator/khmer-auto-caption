@@ -110,7 +110,7 @@ def apk_download():
         name = 'app.apk'
     try:
         data = supabase('GET','/storage/v1/object/apk/current.apk',timeout=180)
-    except urllib.error.HTTPError:
+    except Exception:
         return None, None
     return name, data
 
