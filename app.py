@@ -16,8 +16,8 @@ from google import genai
 from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭')
-st.title('🇰🇭 Smey Auto Caption')
-st.caption('Gemini → Caption → Auto Translate → MP4')
+st.title('🇰🇭 Smey AI Dubbing')
+st.caption('🎙️ Natural Human Voice → Khmer Dubbing → Sync Timing')
 st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
@@ -441,40 +441,13 @@ def make_dubbing_audio(groups, voice, temp_dir, total_duration):
     if r.returncode!=0: raise RuntimeError(r.stderr.decode('utf-8',errors='ignore')[-4000:])
     return out
 
-def separate_music_and_speech(video_path, temp_dir):
-    """Use Demucs to remove original vocals while keeping background music."""
-    import shutil
-    demucs_cmd = shutil.which('demucs')
-    if not demucs_cmd:
-        raise RuntimeError('Demucs មិនមានក្នុង Server។ ត្រូវដំឡើង demucs ដើម្បីកាត់សំឡេងនិយាយ និងរក្សាភ្លេង។')
-    out_dir=os.path.join(temp_dir,'separated')
-    os.makedirs(out_dir,exist_ok=True)
-    cmd=[demucs_cmd,'--two-stems=vocals','-n','htdemucs','-o',out_dir,video_path]
+def replace_video_audio(video_path, dubbing_audio, output_path):
+    cmd=[ffmpeg(),'-y','-i',video_path,'-i',dubbing_audio,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output_path]
     r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    if r.returncode!=0:
-        raise RuntimeError('Demucs បំបែកសំឡេងមិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
-    base=os.path.splitext(os.path.basename(video_path))[0]
-    music=os.path.join(out_dir,'htdemucs',base,'no_vocals.wav')
-    if not os.path.isfile(music):
-        raise RuntimeError('រកមិនឃើញ Music track បន្ទាប់ពីបំបែកសំឡេង។')
-    return music
+    if r.returncode!=0: raise RuntimeError('ប្ដូរសំឡេង Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
+    return output_path
+MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\s\"'<>]*)?", re.I)
 
-def mix_music_with_dubbing(music_audio,dubbing_audio,output_audio):
-    cmd=[ffmpeg(),'-y','-i',music_audio,'-i',dubbing_audio,
-         '-filter_complex','[0:a]volume=0.95[m];[1:a]volume=1.0[d];[m][d]amix=inputs=2:duration=longest:dropout_transition=0[a]',
-         '-map','[a]','-ac','2','-ar','48000','-c:a','aac','-b:a','192k',output_audio]
-    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    if r.returncode!=0:
-        raise RuntimeError('Mix ភ្លេង + សំឡេងខ្មែរ មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
-    return output_audio
-
-def replace_video_audio(video_path, final_audio, output_path):
-    cmd=[ffmpeg(),'-y','-i',video_path,'-i',final_audio,
-         '-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k',
-         '-shortest','-movflags','+faststart',output_path]
-    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    if r.returncode!=0:
-        raise RuntimeError('ប្ដូរសំឡេង Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
 def find_media_urls(html):
     return list(dict.fromkeys(MEDIA_RE.findall(html)))
 
@@ -539,8 +512,8 @@ def webpage_download(page_url, output_path):
     # Public pages containing a media URL
     return page_media_download(page_url, output_path)
 
-st.title('🇰🇭 Smey AI Dubbing')
-st.caption('🎙️ AI Dubbing — រក្សាភ្លេង + កាត់សំឡេងនិយាយដើម + Sync Timing')
+
+st.divider()
 api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
     st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
@@ -582,12 +555,9 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
                 total=max((x['end'] for x in groups), default=audio_duration(audio_path))
                 voice=voice_options[dub_target][voice_label]
                 dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
-                st.write('🎵 4/4 កំពុងកាត់សំឡេងនិយាយដើម និងរក្សាភ្លេង...')
-                music_audio=separate_music_and_speech(input_video,temp_dir)
-                final_audio=os.path.join(temp_dir,'music_plus_khmer.m4a')
-                mix_music_with_dubbing(music_audio,dub_audio,final_audio)
-                replace_video_audio(input_video,final_audio,output_video)
-                status.update(label='✅ Dubbing + ភ្លេង + Sync រួចរាល់!',state='complete')
+                st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
+                replace_video_audio(input_video,dub_audio,output_video)
+                status.update(label='✅ Dubbing រួចរាល់!',state='complete')
             st.subheader('🎬 Result Dubbing')
             st.video(output_video)
             with open(output_video,'rb') as f:
@@ -596,5 +566,4 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
             st.info('ℹ️ សំឡេងត្រូវបាន Sync តាម timing របស់ការនិយាយ។ ការកែចលនាមាត់ពិតៗ (lip-sync) ត្រូវការ AI model បន្ថែម និងមិនទាន់បញ្ចូលក្នុង version នេះ។')
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
-
 
