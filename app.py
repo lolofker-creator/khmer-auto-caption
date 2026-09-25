@@ -481,6 +481,34 @@ def resolve_page_url(url):
     except Exception:
         return url
 
+def tikwm_download(page_url, output_path):
+    """TikTok fallback: ask TikWM to resolve the media URL, then download it."""
+    host = urllib.parse.urlparse(page_url).netloc.lower()
+    if 'tiktok.com' not in host:
+        return None
+    # Short TikTok links can need a few seconds before the redirect is ready.
+    time.sleep(3)
+    form = urllib.parse.urlencode({'url': page_url, 'hd': '1'}).encode()
+    req = urllib.request.Request(
+        'https://www.tikwm.com/api/',
+        data=form,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept': 'application/json,text/plain,*/*',
+        },
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=45) as r:
+        data = json.loads(r.read().decode('utf-8', errors='ignore'))
+    if data.get('code') != 0 or not data.get('data'):
+        raise RuntimeError('TikWM មិនអាចរកវីដេអូពី Link នេះបាន')
+    media = data['data']
+    media_url = media.get('hdplay') or media.get('play') or media.get('wmplay')
+    if not media_url:
+        raise RuntimeError('TikWM មិនបានផ្តល់ Media URL')
+    return download_media_url(media_url, output_path)
+
 def webpage_download(page_url, output_path):
     page_url = page_url.strip()
     resolved_url = resolve_page_url(page_url)
@@ -498,6 +526,16 @@ def webpage_download(page_url, output_path):
                 pass
 
     last_errors = []
+
+    # TikTok fallback through a media resolver. This is useful when
+    # TikTok blocks the Streamlit server IP from direct extraction.
+    for u in candidates:
+        if 'tiktok.com' in urllib.parse.urlparse(u).netloc.lower():
+            try:
+                return tikwm_download(u, output_path)
+            except Exception as e:
+                last_errors.append('TikWM: ' + str(e)[-1200:])
+
     for u in candidates:
         host = urllib.parse.urlparse(u).netloc.lower()
         is_tiktok = 'tiktok.com' in host
