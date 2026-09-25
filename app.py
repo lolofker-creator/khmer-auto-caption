@@ -526,7 +526,8 @@ with st.expander('⬇️ Download Video'):
                 st.success('✅ រួចរាល់')
                 st.video(output.name)
                 with open(output.name, 'rb') as f:
-                    st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
+                    video_data = f.read()
+                st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
             except Exception:
                 st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
 
@@ -627,7 +628,8 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
             st.subheader('🎬 Result Dubbing')
             st.video(output_video)
             with open(output_video,'rb') as f:
-                st.download_button('📥 Download Dubbing MP4',f,file_name='Smey_AI_Dubbing.mp4',mime='video/mp4',key='download_dubbing')
+                dubbing_data = f.read()
+            st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
             st.info('ℹ️ សំឡេងត្រូវបាន Sync តាម timing របស់ការនិយាយ។ ការកែចលនាមាត់ពិតៗ (lip-sync) ត្រូវការ AI model បន្ថែម និងមិនទាន់បញ្ចូលក្នុង version នេះ។')
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
@@ -682,6 +684,7 @@ if st.button('🚀 Auto Caption', type='primary'):
         st.subheader('🎬 Result')
         st.video(output_video)
         with open(output_video, 'rb') as f:
-            st.download_button('📥 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
+            caption_data = f.read()
+        st.download_button('📥 Download MP4', caption_data, file_name='Smey_Auto_Caption.mp4', mime='video/mp4', on_click='ignore')
     except Exception as e:
         st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
