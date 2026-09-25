@@ -587,46 +587,94 @@ with st.expander('📱 APK'):
 # IMPORTANT: Existing features/functions above and below are untouched.
 # ============================================================
 def website_translate_groups(client, groups, target_language):
-    """Stable Website Link translation: force Gemini to return one JSON string per input line."""
+    """Website translation with safe fallback: if a batch returns the wrong count,
+    translate the lines one-by-one so one bad Gemini response cannot stop the job.
+    """
     if not groups or target_language == 'No translation':
         return groups
+
     result = []
     batch_size = 12
-    for start in range(0, len(groups), batch_size):
-        batch = groups[start:start + batch_size]
-        texts = [item['text'] for item in batch]
+
+    def translate_one(text):
         prompt = (
-            f'Translate each input line into {target_language}.\n'
-            'Return EXACTLY one translated string for EACH input line, in the same order.\n'
-            'Do not merge lines. Do not omit lines. Do not add explanations.\n\n'
-            f'Input lines: {json.dumps(texts, ensure_ascii=False)}'
-        )
-        schema = types.Schema(
-            type=types.Type.ARRAY,
-            items=types.Schema(type=types.Type.STRING),
+            f'Translate this spoken subtitle into {target_language}.\n'
+            'Return ONLY the translated sentence. Do not explain anything.\n\n'
+            f'{text}'
         )
         def call():
             return client.models.generate_content(
                 model=TRANSLATE_MODEL,
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type='application/json',
-                    response_schema=schema,
-                    temperature=0.1,
-                )
+                config=types.GenerateContentConfig(temperature=0.1),
             )
         response = retry_gemini(call)
-        values = get_value(response, 'parsed', None)
+        raw = (get_value(response, 'text', '') or '').strip()
+        if not raw:
+            raise RuntimeError('Gemini មិនបានបញ្ជូន Translation')
+        # Keep only the first non-empty line if the model adds an accidental extra line.
+        lines = [x.strip() for x in raw.splitlines() if x.strip()]
+        if not lines:
+            raise RuntimeError('Translation ទទេ')
+        return re.sub(r'^\s*\d+[.)]\s*', '', lines[0]).strip()
+
+    for start in range(0, len(groups), batch_size):
+        batch = groups[start:start + batch_size]
+        texts = [item['text'] for item in batch]
+        prompt = (
+            f'Translate each input line into {target_language}.\n'
+            'Return EXACTLY one translated line for EACH input line, in the same order.\n'
+            'Never merge, omit, summarize, or add lines.\n\n'
+            f'{json.dumps(texts, ensure_ascii=False)}'
+        )
+        schema = types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(type=types.Type.STRING),
+        )
+
+        values = None
+        try:
+            def call_batch():
+                return client.models.generate_content(
+                    model=TRANSLATE_MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type='application/json',
+                        response_schema=schema,
+                        temperature=0.1,
+                    ),
+                )
+            response = retry_gemini(call_batch)
+            values = get_value(response, 'parsed', None)
+            if values is None:
+                raw = (get_value(response, 'text', '') or '').strip()
+                try:
+                    values = json.loads(raw)
+                except Exception:
+                    values = None
+            if not isinstance(values, list) or len(values) != len(batch):
+                values = None
+        except Exception:
+            values = None
+
+        # If Gemini returns 7/9/11 lines instead of the required count,
+        # retry each subtitle separately instead of stopping the whole job.
         if values is None:
-            raw = (get_value(response, 'text', '') or '').strip()
-            try:
-                values = json.loads(raw)
-            except Exception:
-                values = []
-        if not isinstance(values, list) or len(values) != len(batch):
-            raise RuntimeError(f'Website Translation បានតែ {len(values) if isinstance(values, list) else 0} បន្ទាត់ ត្រូវការ {len(batch)}')
+            values = []
+            for item in batch:
+                try:
+                    values.append(translate_one(item['text']))
+                except Exception:
+                    # Keep the original line rather than breaking the whole video.
+                    values.append(item['text'])
+
         for item, text in zip(batch, values):
-            result.append({'text': str(text).strip(), 'start': item['start'], 'end': item['end']})
+            result.append({
+                'text': str(text).strip() or item['text'],
+                'start': item['start'],
+                'end': item['end'],
+            })
+
     return result
 
 
