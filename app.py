@@ -580,6 +580,7 @@ with st.expander('📱 APK'):
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
 
 st.divider()
+api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
     st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
     dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
