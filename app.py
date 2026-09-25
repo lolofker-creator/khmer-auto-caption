@@ -17,7 +17,7 @@ from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭')
 st.title('🇰🇭 Smey AI Dubbing')
-st.caption('🎙️ Natural Human Voice → Khmer Dubbing → Sync Timing')
+st.caption('🎙️ Khmer AI Natural Voice → Dubbing → Sync Timing')
 st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
@@ -344,10 +344,42 @@ def free_tts(text, output_mp3, language='km'):
     tts.save(output_mp3)
     return output_mp3
 
+@st.cache_resource
+def get_khmer_vits():
+    from transformers import VitsModel, AutoTokenizer
+    import torch
+    model_id = 'KrorngAI/mms-tts-khm-finetuned'
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = VitsModel.from_pretrained(model_id)
+    model.eval()
+    return tokenizer, model, torch
+
+def khmer_vits_voice(text, output_wav):
+    text = text.strip()
+    if not text:
+        raise ValueError('សូមបញ្ចូលអត្ថបទ')
+    try:
+        import scipy.io.wavfile as wavfile
+        tokenizer, model, torch = get_khmer_vits()
+        inputs = tokenizer(text, return_tensors='pt')
+        with torch.no_grad():
+            waveform = model(**inputs).waveform.squeeze().cpu().numpy()
+        wavfile.write(output_wav, model.config.sampling_rate, waveform)
+        if os.path.isfile(output_wav) and os.path.getsize(output_wav) > 1000:
+            return output_wav
+        raise RuntimeError('Khmer AI Voice មិនបានបង្កើតសំឡេង')
+    except Exception as e:
+        # fallback ជា gTTS ដើម្បីកុំឱ្យ Dubbing បរាជ័យទាំងស្រុង
+        fallback = output_wav.rsplit('.', 1)[0] + '.mp3'
+        gTTS(text=text, lang='km', slow=False).save(fallback)
+        return fallback
+
 def edge_tts_voice(text, output_mp3, voice):
     text = text.strip()
     if not text:
         raise ValueError('សូមបញ្ចូលអត្ថបទ')
+    if voice == 'khmer-vits':
+        return khmer_vits_voice(text, output_mp3.rsplit('.', 1)[0] + '.wav')
     try:
         import edge_tts
     except ImportError:
@@ -371,8 +403,7 @@ def edge_tts_voice(text, output_mp3, voice):
         return output_mp3
     except Exception as edge_error:
         # Fallback ដើម្បីកុំឱ្យ Dubbing បរាជ័យទាំងស្រុង ប្រសិនបើ Edge TTS ត្រូវបាន block/503។
-        fallback = {'km-KH-PisethNeural':'km', 'km-KH-SreymomNeural':'km',
-                    'zh-CN-YunxiNeural':'zh-CN', 'zh-CN-XiaoxiaoNeural':'zh-CN',
+        fallback = {'zh-CN-YunxiNeural':'zh-CN', 'zh-CN-XiaoxiaoNeural':'zh-CN',
                     'en-US-GuyNeural':'en', 'en-US-JennyNeural':'en'}
         lang = fallback.get(voice)
         if lang:
@@ -520,7 +551,7 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
     dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
     dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
     voice_options = {
-        'Khmer': {'ប្រុស — Piseth': 'km-KH-PisethNeural', 'ស្រី — Sreymom': 'km-KH-SreymomNeural'},
+        'Khmer': {'🇰🇭 Khmer AI — Natural': 'khmer-vits'},
         'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
         'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
     }
