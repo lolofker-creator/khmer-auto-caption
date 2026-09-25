@@ -450,8 +450,12 @@ def make_dubbing_audio(groups, voice, temp_dir, total_duration):
     for i,item in enumerate(groups):
         raw=os.path.join(temp_dir,f'dub_raw_{i:04d}.mp3')
         fitted=os.path.join(temp_dir,f'dub_fit_{i:04d}.wav')
-        edge_tts_voice(item['text'], raw, voice)
-        fit_audio_to_duration(raw, fitted, max(0.25,item['end']-item['start']))
+        generated = edge_tts_voice(item['text'], raw, voice)
+        # Khmer AI Voice អាចបង្កើតជា WAV ខណៈ fallback អាចជា MP3; ប្រើ path ដែលបាន return ពិតៗ
+        source_audio = generated if generated and os.path.isfile(generated) else raw
+        if not os.path.isfile(source_audio):
+            raise RuntimeError('មិនបានបង្កើតសំឡេង Dubbing សម្រាប់ប្រយោគនេះ')
+        fit_audio_to_duration(source_audio, fitted, max(0.25,item['end']-item['start']))
         segment_paths.append((item['start'], fitted))
     silent=os.path.join(temp_dir,'dub_silent.wav')
     cmd=[ffmpeg(),'-y','-f','lavfi','-i',f'anullsrc=r=48000:cl=stereo', '-t',str(max(total_duration,0.1)), '-c:a','pcm_s16le',silent]
