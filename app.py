@@ -8,6 +8,7 @@ import urllib.parse
 import time
 import wave
 import json
+import asyncio
 from gtts import gTTS
 import asyncio
 import streamlit as st
@@ -344,18 +345,44 @@ def free_tts(text, output_mp3, language='km'):
     return output_mp3
 
 def edge_tts_voice(text, output_mp3, voice):
+    text = text.strip()
+    if not text:
+        raise ValueError('សូមបញ្ចូលអត្ថបទ')
     try:
         import edge_tts
     except ImportError:
         raise RuntimeError('សូមបន្ថែម edge-tts ក្នុង requirements.txt')
-    text = text.strip()
-    if not text:
-        raise ValueError('សូមបញ្ចូលអត្ថបទ')
+
     async def run():
-        communicate = edge_tts.Communicate(text, voice, rate='+0%', pitch='+0Hz', volume='+0%')
-        await communicate.save(output_mp3)
-    asyncio.run(run())
-    return output_mp3
+        last = None
+        for _ in range(3):
+            try:
+                communicate = edge_tts.Communicate(text, voice, rate='+0%', pitch='+0Hz', volume='+0%')
+                await communicate.save(output_mp3)
+                if os.path.isfile(output_mp3) and os.path.getsize(output_mp3) > 1000:
+                    return
+            except Exception as e:
+                last = e
+                await asyncio.sleep(1)
+        raise RuntimeError(f'Edge Neural Voice មិនបានផ្ញើសំឡេង: {last}')
+
+    try:
+        asyncio.run(run())
+        return output_mp3
+    except Exception as edge_error:
+        # Fallback ដើម្បីកុំឱ្យ Dubbing បរាជ័យទាំងស្រុង ប្រសិនបើ Edge TTS ត្រូវបាន block/503។
+        fallback = {'km-KH-PisethNeural':'km', 'km-KH-SreymomNeural':'km',
+                    'zh-CN-YunxiNeural':'zh-CN', 'zh-CN-XiaoxiaoNeural':'zh-CN',
+                    'en-US-GuyNeural':'en', 'en-US-JennyNeural':'en'}
+        lang = fallback.get(voice)
+        if lang:
+            try:
+                gTTS(text=text, lang=lang, slow=False).save(output_mp3)
+                if os.path.isfile(output_mp3) and os.path.getsize(output_mp3) > 1000:
+                    return output_mp3
+            except Exception:
+                pass
+        raise RuntimeError(f'Neural Voice មិនអាចបង្កើតសំឡេងបាន: {edge_error}')
 
 def audio_duration(path):
     command=[ffmpeg(), '-i', path, '-f', 'null', '-']
@@ -553,7 +580,6 @@ with st.expander('📱 APK'):
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
 
 st.divider()
-api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
     st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
     dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
@@ -607,6 +633,7 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
 
 st.divider()
 st.subheader('🎬 Auto Caption')
+api_key = get_api_key()
 source_language = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'])
 target_language = st.selectbox('ភាសា Caption', ['Khmer', 'Chinese', 'No translation'])
 uploaded_video = st.file_uploader('📤 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
