@@ -619,67 +619,32 @@ def tdown_download(page_url, output_path):
 
 
 
-def tiktok_direct_video_links(page_url):
-    """Return browser-downloadable TikTok video URLs from several public resolvers."""
-    found = []
-
-    def add(label, url):
-        if isinstance(url, str) and url.startswith('http') and url not in [x[1] for x in found]:
-            found.append((label, url))
-
-    # TDown: public Cloudflare Worker; supports vt.tiktok.com short links.
-    try:
-        api = 'https://tdownv4.sl-bjs.workers.dev/?' + urllib.parse.urlencode({'down': page_url})
-        req = urllib.request.Request(api, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json,text/plain,*/*'})
-        with urllib.request.urlopen(req, timeout=45) as r:
-            data = json.loads(r.read().decode('utf-8', errors='ignore'))
-        media = data.get('data') or {}
-        add('TDown Video', data.get('download_url'))
-        add('TDown HD', media.get('hdplay'))
-        add('TDown Video', media.get('play'))
-        add('TDown Watermark', media.get('wmplay'))
-        add('TDown Video', media.get('video'))
-    except Exception:
-        pass
-
-    # ClipX: public resolver, no API key.
-    try:
-        api = 'https://clipx.zamdev.workers.dev/?' + urllib.parse.urlencode({
-            'url': page_url, 'quality': 'best', 'audio': 'false', 'cover': 'false',
-            'metadata': 'false', 'meta': 'false', 'cache': 'true', 'trace': 'false',
-            'processing_time': 'false', 'contact': 'false'
-        })
-        req = urllib.request.Request(api, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=45) as r:
-            data = json.loads(r.read().decode('utf-8', errors='ignore'))
-        video = ((data.get('data') or {}).get('video') or {})
-        add('ClipX HD', video.get('hd_mp4'))
-        add('ClipX Standard', video.get('standard_mp4'))
-        add('ClipX Watermark', video.get('wmplay'))
-    except Exception:
-        pass
-
-    # TikWM as a third public fallback.
-    try:
-        for base in ('https://www.tikwm.com/api/', 'https://tikwm.com/api/'):
-            qs = urllib.parse.urlencode({'url': page_url, 'hd': '1'})
-            req = urllib.request.Request(base + '?' + qs, headers={
-                'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json,text/plain,*/*',
-                'Referer': 'https://www.tikwm.com/'
-            })
-            with urllib.request.urlopen(req, timeout=45) as r:
-                data = json.loads(r.read().decode('utf-8', errors='ignore'))
-            media = data.get('data') or {}
-            if data.get('code') == 0:
-                add('TikWM HD', media.get('hdplay'))
-                add('TikWM Video', media.get('play'))
-                add('TikWM Watermark', media.get('wmplay'))
-            if found:
-                break
-    except Exception:
-        pass
-
-    return found
+def clipx_any_links(page_url):
+    """Resolve TikTok to whatever public media ClipX returns: video, audio, or images."""
+    api = 'https://clipx.zamdev.workers.dev/?' + urllib.parse.urlencode({
+        'url': page_url, 'quality': 'best', 'audio': 'true', 'cover': 'true',
+        'metadata': 'false', 'meta': 'false', 'cache': 'true', 'trace': 'false',
+        'processing_time': 'false', 'contact': 'false'
+    })
+    req = urllib.request.Request(api, headers={
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
+        'Accept': 'application/json',
+    })
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.loads(r.read().decode('utf-8', errors='ignore'))
+    if not data.get('success'):
+        raise RuntimeError(str(data.get('error') or 'ClipX មិនអាច Resolve Link បាន'))
+    d = data.get('data') or {}
+    links = []
+    v = d.get('video') or {}
+    for label, key in [('HD Video', 'hd_mp4'), ('Standard Video', 'standard_mp4'), ('Video Watermark', 'wmplay')]:
+        u = v.get(key)
+        if u: links.append((label, u, 'video'))
+    a = d.get('audio') or {}
+    if a.get('play'): links.append(('Audio', a['play'], 'audio'))
+    for i,u in enumerate(d.get('images') or [], 1):
+        if u: links.append((f'Image {i}', u, 'image'))
+    return links
 
 def resolver_browser_links(page_url):
     q = urllib.parse.quote(page_url, safe='')
@@ -765,6 +730,19 @@ def webpage_download(page_url, output_path):
         f'Link: {resolved_url}\n\n' + '\n---\n'.join(last_errors[-5:])
     )
 
+with st.expander('🎬 Short Drama — Download All Episodes'):
+    st.caption('ដាក់ Link ភាគណាមួយ → បើក Short Drama Finder → រករឿងទាំងមូល និង Download ជា ZIP។')
+    drama_url = st.text_input('🔗 Link ភាគ Short Drama', placeholder='https://vt.tiktok.com/...', key='short_drama_url')
+    if drama_url.strip():
+        if 'tiktok.com' in drama_url.lower():
+            st.link_button('🎬 បើក Short Drama Finder', 'https://dramascout.app/', use_container_width=True)
+            st.info('ℹ️ នៅលើ Short Drama Finder សូម Paste Link នេះ → Identify → ជ្រើស Download ទាំងរឿង។')
+            st.code(drama_url.strip(), language='text')
+        else:
+            st.warning('សូមដាក់ TikTok Link របស់ភាគ Short Drama។')
+    else:
+        st.link_button('🎬 បើក Short Drama Finder', 'https://dramascout.app/', use_container_width=True)
+
 with st.expander('⬇️ Download Video'):
     page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
     if st.button('⬇️ Download'):
@@ -785,15 +763,19 @@ with st.expander('⬇️ Download Video'):
                 st.error(f'❌ Download មិនបាន:\n{e}')
 
                 if 'tiktok.com' in page_url.lower():
-                    st.warning('⚠️ Server មិនអាចទាញ file ផ្ទាល់ពី TikTok បាន។ ខ្ញុំប្តូរទៅ Direct Download Resolver ជំនួស។')
-                    direct_links = tiktok_direct_video_links(page_url.strip())
-                    if direct_links:
-                        st.success('✅ រកឃើញវីដេអូ — ចុចប៊ូតុងខាងក្រោមដើម្បី Download')
-                        for label, media_url in direct_links:
-                            st.link_button(f'🎬 Download {label}', media_url, use_container_width=True)
-                    else:
-                        st.error('❌ Resolver ទាំងអស់មិនអាចរក Video URL បានទេ។')
-                    st.caption('ℹ️ ប្រព័ន្ធនេះផ្តោតតែ TikTok Video ប៉ុណ្ណោះ។')
+                    st.warning('⚠️ Server មិនអាចយក file មកកាន់ Streamlit បាន ប៉ុន្តែអាចបង្កើត Direct Download Link បាន។')
+                    try:
+                        direct_links = clipx_any_links(page_url.strip())
+                        if direct_links:
+                            st.success('✅ រកឃើញ Media — ចុចខាងក្រោមដើម្បី Download ដោយផ្ទាល់')
+                            for label, media_url, kind in direct_links:
+                                icon = '🎬' if kind == 'video' else ('🎵' if kind == 'audio' else '🖼️')
+                                st.link_button(f'{icon} Download {label}', media_url, use_container_width=True)
+                        else:
+                            st.warning('មិនរកឃើញ Media URL ទេ។')
+                    except Exception as direct_error:
+                        st.error(f'❌ Direct Download Resolver: {direct_error}')
+                    st.caption('ℹ️ អាចជា Video / Audio / Image — មិនកំណត់តែ MP4 ទេ។')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
