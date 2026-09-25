@@ -617,6 +617,14 @@ def tdown_download(page_url, output_path):
         raise RuntimeError(str(data.get('error') or data.get('message') or 'TDown រកមិនឃើញ MP4'))
     return _download_from_url(media_url, output_path, 'https://tdownv4.sl-bjs.workers.dev/')
 
+def resolver_browser_links(page_url):
+    q = urllib.parse.quote(page_url, safe='')
+    return [
+        ('TikWM', f'https://www.tikwm.com/?url={q}'),
+        ('ClipX', f'https://clipx.zamdev.dev/?url={q}'),
+        ('TDown API', f'https://tdownv4.sl-bjs.workers.dev/?down={q}'),
+    ]
+
 def webpage_download(page_url, output_path):
     page_url = page_url.strip()
     resolved_url = resolve_page_url(page_url)
@@ -711,6 +719,11 @@ with st.expander('⬇️ Download Video'):
                 st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
             except Exception as e:
                 st.error(f'❌ Download មិនបាន:\n{e}')
+
+                if 'tiktok.com' in page_url.lower():
+                    st.warning('⚠️ TikTok អាចបានបិទ IP របស់ Server។ សាក Resolver ខាងក្រោមបាន ដោយមិនបាច់ប្តូរ Link។')
+                    for label, link in resolver_browser_links(page_url.strip()):
+                        st.link_button(f'🌐 បើក {label} Download', link, use_container_width=True)
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
