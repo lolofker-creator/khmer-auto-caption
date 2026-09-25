@@ -5,3 +5,4 @@ av
 yt-dlp
 gTTS
 edge-tts
+demucs>=4.0.1
