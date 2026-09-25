@@ -675,6 +675,8 @@ def website_mix_music_and_dub(video_path, music_path, dub_audio, output_path):
     return output_path
 
 
+website_api_key = get_api_key()
+
 with st.expander('🌐 Website Link → Auto Dubbing'):
     st.caption('ដាក់ Link ពី Website → Server ដំណើរការបណ្ដោះអាសន្ន → បកប្រែ → Dubbing។ មិនបាច់ Download → Upload មកវិញទេ។')
     website_url = st.text_input('🔗 ដាក់ Link Website', placeholder='https://...')
@@ -687,7 +689,7 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
     }
     website_voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(website_voice_options[website_target].keys()), key='website_dub_voice')
     if st.button('🌐🎙️ បកប្រែ + Dubbing ពី Link', type='primary', key='website_dub_button'):
-        if not api_key:
+        if not website_api_key:
             st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
             st.stop()
         if not website_url.strip():
