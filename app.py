@@ -587,43 +587,56 @@ with st.expander('📱 APK'):
 # IMPORTANT: Existing features/functions above and below are untouched.
 # ============================================================
 def website_translate_groups(client, groups, target_language):
-    """Translation helper used only by the new Website Link feature."""
+    """Robust translator used only by Website Link feature.
+    Translate one subtitle group at a time so one malformed Gemini response
+    cannot break the whole Website Dubbing job.
+    """
     if not groups or target_language == 'No translation':
         return groups
     result = []
-    batch_size = 12
-    for start in range(0, len(groups), batch_size):
-        batch = groups[start:start + batch_size]
-        numbered = '\n'.join(f'{i+1}. {item["text"]}' for i, item in enumerate(batch))
+    for item in groups:
+        source = item['text'].strip()
+        if not source:
+            result.append({'text': '', 'start': item['start'], 'end': item['end']})
+            continue
         prompt = (
-            f'Translate the following spoken subtitle lines into {target_language}.\n'
-            'Return ONLY the translated lines, one line for each input line, in the exact same order.\n'
-            'Do not add numbering, explanations, quotes, or extra lines.\n\n'
-            f'{numbered}'
+            f'Translate this spoken subtitle into {target_language}.\n'
+            'Return ONLY the translation. Do not explain, number, quote, or add anything.\n'
+            f'Text: {source}'
         )
         def call():
             return client.models.generate_content(
                 model=TRANSLATE_MODEL,
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.2)
+                config=types.GenerateContentConfig(temperature=0.1)
             )
-        response = retry_gemini(call)
-        raw = (get_value(response, 'text', '') or '').strip()
-        if not raw:
-            raise RuntimeError('Website Translation មិនបានទទួលអត្ថបទពី Gemini')
-        lines = [re.sub(r'^\s*\d+[.)]\s*', '', x).strip() for x in raw.splitlines() if x.strip()]
-        if len(lines) != len(batch):
-            # Try JSON array as a second parser without changing the old translator.
+        try:
+            response = retry_gemini(call)
+            translated = (get_value(response, 'text', '') or '').strip()
+            if not translated:
+                parsed = get_value(response, 'parsed', None)
+                if isinstance(parsed, str):
+                    translated = parsed.strip()
+                elif isinstance(parsed, list) and parsed:
+                    translated = str(parsed[0]).strip()
+            if not translated:
+                raise RuntimeError('Gemini មិនបានផ្ញើអត្ថបទបកប្រែ')
+            translated = re.sub(r'^\s*\d+[.)]\s*', '', translated).strip()
+            result.append({'text': translated, 'start': item['start'], 'end': item['end']})
+        except Exception as exc:
+            # Retry once with an even simpler prompt before failing the feature.
             try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    lines = [str(x).strip() for x in parsed]
+                simple_prompt = f'Translate to {target_language}: {source}'
+                response = retry_gemini(lambda: client.models.generate_content(
+                    model=TRANSLATE_MODEL,
+                    contents=simple_prompt
+                ))
+                translated = (get_value(response, 'text', '') or '').strip()
+                if not translated:
+                    raise RuntimeError('empty translation')
+                result.append({'text': translated, 'start': item['start'], 'end': item['end']})
             except Exception:
-                pass
-        if len(lines) != len(batch):
-            raise RuntimeError(f'Website Translation បានតែ {len(lines)} បន្ទាត់ ត្រូវការ {len(batch)}')
-        for item, text in zip(batch, lines):
-            result.append({'text': text, 'start': item['start'], 'end': item['end']})
+                raise RuntimeError(f'Website Translation មិនបានសម្រេច: {source[:120]}') from exc
     return result
 
 
@@ -695,7 +708,7 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
         if not website_url.strip():
             st.warning('សូមដាក់ Link ជាមុន')
             st.stop()
-        client = get_gemini_client(website_api_key)
+        client = get_gemini_client(api_key)
         temp_dir = tempfile.mkdtemp()
         input_video = os.path.join(temp_dir, 'website_input.mp4')
         source_audio = os.path.join(temp_dir, 'website_source.wav')
