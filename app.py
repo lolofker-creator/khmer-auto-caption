@@ -9,6 +9,7 @@ import time
 import wave
 import json
 import asyncio
+import uuid
 from gtts import gTTS
 import asyncio
 import streamlit as st
@@ -20,7 +21,7 @@ st.title('🇰🇭 Smey Auto Caption')
 st.caption('Gemini → Caption → Auto Translate → MP4')
 st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
-TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
+TRANSLATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite']
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
 FONT_PATH = os.path.join(FONT_DIR, 'NotoSansKhmer-Regular.ttf')
@@ -61,6 +62,107 @@ def supabase(method, path, data=None, ctype=None, timeout=180):
     except urllib.error.HTTPError as e:
         msg = e.read().decode('utf-8', errors='ignore')
         raise RuntimeError(f'Supabase HTTP {e.code}: {msg or e.reason}') from e
+
+# =========================
+# 👥 User Tracking
+# =========================
+USER_BUCKET = 'user_tracking'
+
+def ensure_user_bucket():
+    settings = json.dumps({
+        'id': USER_BUCKET,
+        'name': USER_BUCKET,
+        'public': False
+    }).encode()
+    try:
+        supabase('POST', '/storage/v1/bucket', settings, 'application/json', timeout=30)
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if '409' not in msg and 'already exists' not in msg and 'duplicate' not in msg:
+            raise
+
+def user_session_id():
+    if 'user_session_id' not in st.session_state:
+        st.session_state.user_session_id = uuid.uuid4().hex
+    return st.session_state.user_session_id
+
+def track_user(name):
+    name = (name or '').strip()[:80]
+    if not name:
+        return
+    try:
+        ensure_user_bucket()
+        sid = user_session_id()
+        now = time.time()
+        record = {
+            'session_id': sid,
+            'name': name,
+            'last_seen': now
+        }
+        data = json.dumps(record, ensure_ascii=False).encode('utf-8')
+        base = secret('SUPABASE_URL').rstrip('/')
+        key = secret('SUPABASE_SERVICE_KEY')
+        object_name = urllib.parse.quote(f'sessions/{sid}.json', safe='/')
+        req = urllib.request.Request(
+            base + f'/storage/v1/object/{USER_BUCKET}/{object_name}',
+            data=data,
+            headers={
+                'apikey': key,
+                'Authorization': f'Bearer {key}',
+                'Content-Type': 'application/json',
+                'x-upsert': 'true'
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+    except Exception:
+        pass
+
+def get_tracked_users():
+    ensure_user_bucket()
+    body = json.dumps({
+        'prefix': 'sessions/',
+        'limit': 1000,
+        'offset': 0,
+        'sortBy': {'column': 'name', 'order': 'asc'}
+    }).encode()
+    raw = supabase('POST', f'/storage/v1/object/list/{USER_BUCKET}', body, 'application/json', timeout=30)
+    users = []
+    for item in json.loads(raw or b'[]'):
+        name = item.get('name', '')
+        if not name.endswith('.json'):
+            continue
+        try:
+            object_path = name if name.startswith('sessions/') else f'sessions/{name}'
+            object_path = urllib.parse.quote(object_path, safe='/')
+            data = supabase('GET', f'/storage/v1/object/{USER_BUCKET}/{object_path}', timeout=15)
+            users.append(json.loads(data or b'{}'))
+        except Exception:
+            pass
+    return users
+
+
+# 👤 User name for activity tracking
+if 'tracking_name' not in st.session_state:
+    st.session_state.tracking_name = ''
+with st.expander('👤 អ្នកកំពុងប្រើកម្មវិធី', expanded=not bool(st.session_state.tracking_name)):
+    tracking_name = st.text_input(
+        'ឈ្មោះរបស់អ្នក',
+        value=st.session_state.tracking_name,
+        placeholder='ឧ. Smey',
+        key='tracking_name_input'
+    )
+    if st.button('✅ ចូលប្រើ', key='tracking_login'):
+        if tracking_name.strip():
+            st.session_state.tracking_name = tracking_name.strip()[:80]
+            st.rerun()
+        else:
+            st.warning('សូមបញ្ចូលឈ្មោះជាមុន')
+
+if st.session_state.tracking_name:
+    track_user(st.session_state.tracking_name)
+    st.caption(f'🟢 កំពុងប្រើជា: **{st.session_state.tracking_name}**')
 
 def apk_list():
     body = json.dumps({'prefix':'','limit':100,'offset':0,'sortBy':{'column':'name','order':'asc'}}).encode()
@@ -252,36 +354,69 @@ def transcribe(client, audio_path, source_language):
         return client.models.generate_content(model=TRANSCRIBE_MODEL, contents=[types.Part.from_bytes(data=audio_data, mime_type='audio/wav'), prompt], config=types.GenerateContentConfig(audio_transcription_config=transcription_config))
     return retry_gemini(call)
 
+def parse_translation_values(response):
+    raw = get_value(response, 'text', '') or ''
+    raw = str(raw).strip()
+    if not raw:
+        return None
+    raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.I)
+    raw = re.sub(r'\s*```$', '', raw).strip()
+    try:
+        value = json.loads(raw)
+        if isinstance(value, dict):
+            for key in ('translations', 'items', 'lines', 'results'):
+                if isinstance(value.get(key), list):
+                    value = value[key]
+                    break
+        return value if isinstance(value, list) else None
+    except Exception:
+        lines = [x.strip().strip('"') for x in raw.splitlines() if x.strip()]
+        return lines or None
+
 def translate_groups(client, groups, target_language):
     if not groups or target_language == 'No translation':
         return groups
     translated = []
-    batch_size = 15
+    batch_size = 10
     for start in range(0, len(groups), batch_size):
         batch = groups[start:start + batch_size]
         texts = [item['text'] for item in batch]
-        prompt = f'Translate each subtitle line into {target_language}.\nReturn exactly one translated line per input line, in the same order. Do not add explanations. Keep names and numbers accurate.\n\nInput:\n{texts}'
+        prompt = (
+            f'Translate each input subtitle line into {target_language}. '
+            'Return ONLY a JSON array of strings, exactly one string for each input line, same order. '
+            'Do not explain anything. Preserve names, numbers, and meaning.\n\n'
+            + json.dumps(texts, ensure_ascii=False)
+        )
         schema = types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING))
-
-        def call():
-            return client.models.generate_content(model=TRANSLATE_MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=schema))
-        try:
-            response = retry_gemini(call)
-            values = get_value(response, 'parsed', None)
-            if values is None:
-                raw = get_value(response, 'text', '') or ''
-                try:
-                    values = json.loads(raw)
-                except Exception:
-                    values = []
-            if not isinstance(values, list) or len(values) != len(batch):
+        values = None
+        last_error = None
+        for model_name in TRANSLATE_MODELS:
+            def call(model_name=model_name):
+                return client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type='application/json',
+                        response_schema=schema,
+                        temperature=0.2
+                    )
+                )
+            try:
+                response = retry_gemini(call)
+                values = parse_translation_values(response)
+                if isinstance(values, list) and len(values) == len(batch):
+                    break
                 raise RuntimeError('Translation response មិនត្រឹមត្រូវ')
-        except Exception as exc:
-            st.warning('⚠️ Gemini Translation មិនទាន់អាចប្រើបាន។ Caption នឹងរក្សាភាសាដើមសម្រាប់ផ្នែកនេះ។')
+            except Exception as exc:
+                last_error = exc
+                values = None
+        if not isinstance(values, list) or len(values) != len(batch):
+            st.warning(f'⚠️ Gemini Translation មិនអាចបកប្រែផ្នែកនេះបាន: {last_error}')
             values = [item['text'] for item in batch]
         for index, item in enumerate(batch):
             translated.append({'text': str(values[index]), 'start': item['start'], 'end': item['end']})
     return translated
+
 ASS_HEADER = '[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,55,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 
 def make_ass(groups, ass_path):
@@ -441,29 +576,49 @@ def make_dubbing_audio(groups, voice, temp_dir, total_duration):
     if r.returncode!=0: raise RuntimeError(r.stderr.decode('utf-8',errors='ignore')[-4000:])
     return out
 
-def replace_video_audio(video_path, dubbing_audio, output_path):
-    cmd=[ffmpeg(),'-y','-i',video_path,'-i',dubbing_audio,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output_path]
+def extract_music_without_dialogue(video_path, output_audio):
+    """Approximate dialogue removal for stereo videos by cancelling center audio.
+    Most spoken dialogue is centered; stereo background music/effects are retained.
+    """
+    probe = subprocess.run([ffmpeg(), '-i', video_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    info = probe.stderr.decode('utf-8', errors='ignore')
+    is_stereo = bool(re.search(r'Audio:.*(?:stereo|2 channels)', info, re.I))
+    if is_stereo:
+        # Center cancellation: FL-FR / FR-FL. This removes centered speech while
+        # retaining the stereo side information where background music usually lives.
+        af = 'pan=stereo|FL=0.5*FL-0.5*FR|FR=0.5*FR-0.5*FL,volume=1.25'
+    else:
+        # Mono tracks cannot be separated reliably with FFmpeg alone. Keep a very
+        # low bed so the dubbed voice remains clear instead of duplicating dialogue.
+        af = 'volume=0.08'
+    cmd=[ffmpeg(),'-y','-i',video_path,'-vn','-af',af,'-ac','2','-ar','48000','-c:a','pcm_s16le',output_audio]
     r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    if r.returncode!=0: raise RuntimeError('ប្ដូរសំឡេង Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
+    if r.returncode!=0:
+        raise RuntimeError('មិនអាចបំបាត់សំឡេងនិយាយដើមបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-4000:])
+    return output_audio
+
+def replace_video_audio(video_path, dubbing_audio, output_path):
+    temp_dir=os.path.dirname(output_path)
+    music_audio=os.path.join(temp_dir,'background_music.wav')
+    extract_music_without_dialogue(video_path, music_audio)
+    # Keep original background music/effects and add the new dubbed speech.
+    # Duck the music slightly so the translated voice stays clear.
+    cmd=[
+        ffmpeg(),'-y','-i',video_path,'-i',music_audio,'-i',dubbing_audio,
+        '-filter_complex','[1:a]volume=0.75[music];[2:a]volume=1.35[dub];[music][dub]amix=inputs=2:duration=longest:normalize=0[aout]',
+        '-map','0:v:0','-map','[aout]','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output_path
+    ]
+    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if r.returncode!=0:
+        raise RuntimeError('បញ្ចូលភ្លេងដើម + Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
     return output_path
-MEDIA_EXTENSIONS = ('mp4','m3u8','webm','mov','mkv','avi','flv','m4v','ts','3gp','ogv')
-MEDIA_RE = re.compile(
-    r"https?://[^\s\"'<>]+?(?:\.(?:" + '|'.join(MEDIA_EXTENSIONS) + r"))(?:\?[^\s\"'<>]*)?",
-    re.I
-)
+
+MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\s\"'<>]*)?", re.I)
 
 def find_media_urls(html):
     return list(dict.fromkeys(MEDIA_RE.findall(html)))
 
-def media_extension(url, default='.mp4'):
-    path = urllib.parse.urlparse(url).path
-    ext = os.path.splitext(path)[1].lower()
-    allowed = {'.' + x for x in MEDIA_EXTENSIONS if x != 'm3u8'}
-    return ext if ext in allowed else default
-
-def download_media_url(url, output_base):
-    ext = media_extension(url)
-    output_path = output_base + ext
+def download_media_url(url, output_path):
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=60) as r, open(output_path, 'wb') as f:
         while True:
@@ -473,33 +628,32 @@ def download_media_url(url, output_base):
             f.write(chunk)
     return output_path
 
-def page_media_download(page_url, output_base):
+def page_media_download(page_url, output_path):
     req = urllib.request.Request(page_url, headers={'User-Agent': 'Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36'})
     with urllib.request.urlopen(req, timeout=30) as r:
         html = r.read().decode('utf-8', errors='ignore')
     for url in find_media_urls(html):
         try:
-            if re.search(r'\.m3u8(?:\?|$)', url, re.I):
-                return webpage_download(url, output_base)
-            return download_media_url(url, output_base)
+            return download_media_url(url, output_path)
         except Exception:
             pass
     raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
 
-def webpage_download(page_url, output_base):
-    # Direct files keep their original format. M3U8 is handled by yt-dlp.
-    if re.search(r'\.(?:' + '|'.join(MEDIA_EXTENSIONS) + r')(?:\?|$)', page_url, re.I) and not re.search(r'\.m3u8(?:\?|$)', page_url, re.I):
+def webpage_download(page_url, output_path):
+    # Direct video URL
+    if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', page_url, re.I):
         try:
-            return download_media_url(page_url, output_base)
+            return download_media_url(page_url, output_path)
         except Exception:
             pass
 
-    # Do not force MP4. yt-dlp keeps the selected/source container when possible.
+    # Supported sites
     try:
         import yt_dlp
         options = {
-            'outtmpl': output_base + '.%(ext)s',
+            'outtmpl': output_path,
             'format': 'bv*+ba/b',
+            'merge_output_format': 'mp4',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
@@ -510,17 +664,20 @@ def webpage_download(page_url, output_base):
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([page_url])
-        candidates = []
-        for ext in MEDIA_EXTENSIONS:
-            candidate = output_base + '.' + ext
+        if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        base = os.path.splitext(output_path)[0]
+        for ext in ('.mp4', '.webm', '.mkv'):
+            candidate = base + ext
             if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                candidates.append(candidate)
-        if candidates:
-            return max(candidates, key=os.path.getsize)
+                if candidate != output_path:
+                    os.replace(candidate, output_path)
+                return output_path
     except Exception:
         pass
 
-    return page_media_download(page_url, output_base)
+    # Public pages containing a media URL
+    return page_media_download(page_url, output_path)
 
 with st.expander('⬇️ Download Video'):
     page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
@@ -530,18 +687,14 @@ with st.expander('⬇️ Download Video'):
         else:
             try:
                 with st.spinner('កំពុង Download...'):
-                    temp_dir = tempfile.mkdtemp()
-                    output_base = os.path.join(temp_dir, 'download')
-                    output_path = webpage_download(page_url.strip(), output_base)
-                file_name = os.path.basename(output_path)
-                import mimetypes
-                mime = mimetypes.guess_type(output_path)[0] or 'application/octet-stream'
-                st.success(f'✅ រួចរាល់: {file_name}')
-                if os.path.splitext(output_path)[1].lower() in ('.mp4', '.webm', '.ogv'):
-                    st.video(output_path)
-                with open(output_path, 'rb') as f:
-                    download_data = f.read()
-                st.download_button('📥 ទាញយកវីដេអូ', download_data, file_name=file_name, mime=mime, on_click='ignore')
+                    output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                    output.close()
+                    webpage_download(page_url.strip(), output.name)
+                st.success('✅ រួចរាល់')
+                st.video(output.name)
+                with open(output.name, 'rb') as f:
+                    video_data = f.read()
+                st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
             except Exception:
                 st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
 
@@ -577,6 +730,30 @@ with st.expander('📱 APK'):
 
     with st.expander('👑 Admin'):
         password=st.text_input('🔐 Password',type='password',key='apk_password')
+
+        if password == secret('APK_ADMIN_PASSWORD') and password:
+            st.subheader('👥 អ្នកកំពុងប្រើ')
+            try:
+                users = get_tracked_users()
+                now = time.time()
+                rows = []
+                for user in sorted(users, key=lambda x: x.get('last_seen', 0), reverse=True):
+                    last = float(user.get('last_seen', 0) or 0)
+                    active = (now - last) <= 300
+                    last_text = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last)) if last else '—'
+                    rows.append({
+                        '👤 ឈ្មោះ': user.get('name', 'មិនស្គាល់'),
+                        '🟢 ស្ថានភាព': '🟢 កំពុងប្រើ' if active else '⚪ មិន Active',
+                        '🕐 ប្រើចុងក្រោយ': last_text
+                    })
+                active_count = sum(1 for row in rows if row['🟢 ស្ថានភាព'] == '🟢 កំពុងប្រើ')
+                st.write(f'🟢 កំពុងប្រើ: **{active_count}** នាក់  |  👥 សរុប: **{len(rows)}** sessions')
+                if rows:
+                    st.dataframe(rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info('មិនទាន់មានអ្នកប្រើ')
+            except Exception as e:
+                st.warning(f'⚠️ User Tracking: {e}')
         uploaded=st.file_uploader('📤 Upload APK',type=['apk'],key='apk_file')
         custom=st.text_input('✏️ ឈ្មោះ APK',placeholder='ឧ. Smey AI VIP 1',key='apk_name_input')
         if st.button('⬆️ Upload APK',use_container_width=True,key='apk_upload_button'):
