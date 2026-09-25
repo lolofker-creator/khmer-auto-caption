@@ -563,6 +563,60 @@ def tikwm_download(page_url, output_path):
 
     raise RuntimeError('TikWM មិនអាចទាញបាន: ' + ' | '.join(errors[-3:]))
 
+def _download_from_url(media_url, output_path, referer='https://www.tiktok.com/'):
+    req = urllib.request.Request(media_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36',
+        'Referer': referer,
+        'Accept': '*/*',
+    })
+    with urllib.request.urlopen(req, timeout=120) as r, open(output_path, 'wb') as f:
+        while True:
+            chunk = r.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) < 1024:
+        raise RuntimeError('Media file ទទេ ឬតូចពេក')
+    return output_path
+
+def clipx_download(page_url, output_path):
+    """Public ClipX resolver; avoids direct TikTok access from Streamlit IP."""
+    api = 'https://clipx.zamdev.workers.dev/?' + urllib.parse.urlencode({
+        'url': page_url, 'quality': 'best', 'audio': 'true', 'cover': 'false',
+        'metadata': 'false', 'meta': 'false', 'cache': 'true', 'trace': 'false',
+        'processing_time': 'false', 'contact': 'false'
+    })
+    req = urllib.request.Request(api, headers={
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
+        'Accept': 'application/json',
+    })
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.loads(r.read().decode('utf-8', errors='ignore'))
+    if not data.get('success'):
+        raise RuntimeError(str(data.get('error') or 'ClipX មិនអាច Resolve Link បាន'))
+    video = ((data.get('data') or {}).get('video') or {})
+    media_url = video.get('hd_mp4') or video.get('standard_mp4') or video.get('wmplay')
+    if not media_url:
+        raise RuntimeError('ClipX រកមិនឃើញ MP4')
+    return _download_from_url(media_url, output_path, 'https://clipx.zamdev.workers.dev/')
+
+def tdown_download(page_url, output_path):
+    """Public Cloudflare-worker resolver fallback."""
+    api = 'https://tdownv4.sl-bjs.workers.dev/?' + urllib.parse.urlencode({'down': page_url})
+    req = urllib.request.Request(api, headers={
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
+        'Accept': 'application/json,text/plain,*/*',
+    })
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.loads(r.read().decode('utf-8', errors='ignore'))
+    media_url = data.get('download_url')
+    if not media_url:
+        media = data.get('data') or {}
+        media_url = media.get('download_url') or media.get('hdplay') or media.get('play') or media.get('video')
+    if not media_url:
+        raise RuntimeError(str(data.get('error') or data.get('message') or 'TDown រកមិនឃើញ MP4'))
+    return _download_from_url(media_url, output_path, 'https://tdownv4.sl-bjs.workers.dev/')
+
 def webpage_download(page_url, output_path):
     page_url = page_url.strip()
     resolved_url = resolve_page_url(page_url)
@@ -571,7 +625,6 @@ def webpage_download(page_url, output_path):
         if u and u not in candidates:
             candidates.append(u)
 
-    # Direct media URL first
     for u in candidates:
         if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv|avi|ts)(?:\?|$)', u, re.I):
             try:
@@ -580,22 +633,27 @@ def webpage_download(page_url, output_path):
                 pass
 
     last_errors = []
+    is_tiktok = any('tiktok.com' in urllib.parse.urlparse(u).netloc.lower() for u in candidates)
 
-    # TikTok fallback through a media resolver. This is useful when
-    # TikTok blocks the Streamlit server IP from direct extraction.
-    for u in candidates:
-        if 'tiktok.com' in urllib.parse.urlparse(u).netloc.lower():
-            try:
-                return tikwm_download(u, output_path)
-            except Exception as e:
-                last_errors.append('TikWM: ' + str(e)[-1200:])
+    # TikTok: use external resolvers first because Streamlit Cloud IP can be blocked by TikTok.
+    if is_tiktok:
+        for resolver_name, resolver in (
+            ('ClipX', clipx_download),
+            ('TDown', tdown_download),
+            ('TikWM', tikwm_download),
+        ):
+            for u in candidates:
+                try:
+                    result = resolver(u, output_path)
+                    if result and os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                        return result
+                except Exception as e:
+                    last_errors.append(f'{resolver_name}: {str(e)[-1000:]}')
 
     for u in candidates:
         host = urllib.parse.urlparse(u).netloc.lower()
-        is_tiktok = 'tiktok.com' in host
         try:
             import yt_dlp
-            ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
             options = {
                 'outtmpl': output_path,
                 'format': 'best[ext=mp4]/bestvideo*+bestaudio/best',
@@ -605,29 +663,12 @@ def webpage_download(page_url, output_path):
                 'no_warnings': True,
                 'nocheckcertificate': True,
                 'geo_bypass': True,
-                'check_formats': True,
                 'ffmpeg_location': ffmpeg(),
-                'retries': 10,
-                'fragment_retries': 10,
-                'file_access_retries': 10,
-                'socket_timeout': 60,
-                'concurrent_fragment_downloads': 1,
-                'http_headers': {
-                    'User-Agent': ua,
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Referer': 'https://www.tiktok.com/' if is_tiktok else u,
-                },
+                'retries': 5,
+                'fragment_retries': 5,
+                'file_access_retries': 5,
+                'socket_timeout': 45,
             }
-            if is_tiktok:
-                options['extractor_args'] = {
-                    'tiktok': {
-                        'app_name': ['musical_ly'],
-                        'app_version': ['35.1.3'],
-                        'manifest_app_version': ['2023501030'],
-                        'aid': ['0'],
-                    }
-                }
             with yt_dlp.YoutubeDL(options) as ydl:
                 ydl.download([u])
             if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
@@ -640,17 +681,16 @@ def webpage_download(page_url, output_path):
                         os.replace(candidate, output_path)
                     return output_path
         except Exception as e:
-            last_errors.append(str(e)[-2500:])
+            last_errors.append('yt-dlp: ' + str(e)[-1800:])
 
-    # Last fallback: look for media URLs embedded in the page HTML
     try:
         return page_media_download(resolved_url, output_path)
     except Exception as e:
-        last_errors.append(str(e)[-2500:])
+        last_errors.append('HTML: ' + str(e)[-1200:])
 
     raise RuntimeError(
         'Server មិនអាចទាញ Media ពី Link នេះបានទេ។\n'
-        f'Link: {resolved_url}\n\n' + '\n---\n'.join(last_errors[-3:])
+        f'Link: {resolved_url}\n\n' + '\n---\n'.join(last_errors[-5:])
     )
 
 with st.expander('⬇️ Download Video'):
