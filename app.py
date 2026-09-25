@@ -587,75 +587,75 @@ with st.expander('📱 APK'):
 # IMPORTANT: Existing features/functions above and below are untouched.
 # ============================================================
 def website_translate_groups(client, groups, target_language):
-    """Translation helper used only by the new Website Link feature."""
+    """Stable Website Link translation: force Gemini to return one JSON string per input line."""
     if not groups or target_language == 'No translation':
         return groups
     result = []
     batch_size = 12
     for start in range(0, len(groups), batch_size):
         batch = groups[start:start + batch_size]
-        numbered = '\n'.join(f'{i+1}. {item["text"]}' for i, item in enumerate(batch))
+        texts = [item['text'] for item in batch]
         prompt = (
-            f'Translate the following spoken subtitle lines into {target_language}.\n'
-            'Return ONLY the translated lines, one line for each input line, in the exact same order.\n'
-            'Do not add numbering, explanations, quotes, or extra lines.\n\n'
-            f'{numbered}'
+            f'Translate each input line into {target_language}.\n'
+            'Return EXACTLY one translated string for EACH input line, in the same order.\n'
+            'Do not merge lines. Do not omit lines. Do not add explanations.\n\n'
+            f'Input lines: {json.dumps(texts, ensure_ascii=False)}'
+        )
+        schema = types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(type=types.Type.STRING),
         )
         def call():
             return client.models.generate_content(
                 model=TRANSLATE_MODEL,
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.2)
+                config=types.GenerateContentConfig(
+                    response_mime_type='application/json',
+                    response_schema=schema,
+                    temperature=0.1,
+                )
             )
         response = retry_gemini(call)
-        raw = (get_value(response, 'text', '') or '').strip()
-        if not raw:
-            raise RuntimeError('Website Translation មិនបានទទួលអត្ថបទពី Gemini')
-        lines = [re.sub(r'^\s*\d+[.)]\s*', '', x).strip() for x in raw.splitlines() if x.strip()]
-        if len(lines) != len(batch):
-            # Try JSON array as a second parser without changing the old translator.
+        values = get_value(response, 'parsed', None)
+        if values is None:
+            raw = (get_value(response, 'text', '') or '').strip()
             try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    lines = [str(x).strip() for x in parsed]
+                values = json.loads(raw)
             except Exception:
-                pass
-        if len(lines) != len(batch):
-            raise RuntimeError(f'Website Translation បានតែ {len(lines)} បន្ទាត់ ត្រូវការ {len(batch)}')
-        for item, text in zip(batch, lines):
-            result.append({'text': text, 'start': item['start'], 'end': item['end']})
+                values = []
+        if not isinstance(values, list) or len(values) != len(batch):
+            raise RuntimeError(f'Website Translation បានតែ {len(values) if isinstance(values, list) else 0} បន្ទាត់ ត្រូវការ {len(batch)}')
+        for item, text in zip(batch, values):
+            result.append({'text': str(text).strip(), 'start': item['start'], 'end': item['end']})
     return result
 
 
-def website_extract_stereo_audio(video_path, output_audio):
-    """Extract the original stereo track so background music can be kept without Demucs."""
-    cmd = [
-        ffmpeg(), '-y', '-i', video_path,
-        '-vn', '-ac', '2', '-ar', '48000',
-        '-c:a', 'pcm_s16le', output_audio
-    ]
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if r.returncode != 0 or not os.path.isfile(output_audio):
-        raise RuntimeError('មិនអាចយក Original Stereo Audio ពីវីដេអូបាន')
-    return output_audio
-
-
 def website_separate_voice(audio_path, out_dir):
-    """Simple center-channel voice reduction; no Demucs/model download required.
-    Most dialogue in stereo videos is centered. This keeps the left/right
-    background music/ambience and reduces centered speech before dubbing.
-    """
+    """Use Demucs when installed to keep accompaniment/music and remove dialogue."""
+    try:
+        import demucs  # noqa: F401
+    except Exception:
+        raise RuntimeError(
+            'Website Dubbing ត្រូវការ Demucs សម្រាប់បំបែកសំឡេងនិយាយចេញពីភ្លេង។ '
+            'សូមបន្ថែម demucs ទៅ requirements.txt រួច Deploy ម្តងទៀត។'
+        )
     os.makedirs(out_dir, exist_ok=True)
-    output = os.path.join(out_dir, 'background_music.wav')
     cmd = [
-        ffmpeg(), '-y', '-i', audio_path,
-        '-af', 'pan=stereo|FL=FL-FR|FR=FR-FL',
-        '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', output
+        'python', '-m', 'demucs.separate',
+        '-n', 'htdemucs',
+        '--two-stems=vocals',
+        '-o', out_dir,
+        audio_path,
     ]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if r.returncode != 0 or not os.path.isfile(output):
-        raise RuntimeError('មិនអាចកាត់សំឡេងនិយាយចេញពី Original Audio បាន')
-    return output
+    if r.returncode != 0:
+        raise RuntimeError('Demucs បំបែកសំឡេងមិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-4000:])
+    base = os.path.splitext(os.path.basename(audio_path))[0]
+    instrumental = os.path.join(out_dir, 'htdemucs', base, 'no_vocals.wav')
+    vocals = os.path.join(out_dir, 'htdemucs', base, 'vocals.wav')
+    if not os.path.isfile(instrumental):
+        raise RuntimeError('រកមិនឃើញភ្លេងក្រោយពេលបំបែកសំឡេង')
+    return instrumental, vocals
 
 
 def website_mix_music_and_dub(video_path, music_path, dub_audio, output_path):
@@ -702,7 +702,6 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
         temp_dir = tempfile.mkdtemp()
         input_video = os.path.join(temp_dir, 'website_input.mp4')
         source_audio = os.path.join(temp_dir, 'website_source.wav')
-        original_stereo = os.path.join(temp_dir, 'website_original_stereo.wav')
         output_video = os.path.join(temp_dir, 'Smey_Website_Dubbing.mp4')
         try:
             with st.status('កំពុងដំណើរការ Website Dubbing...', expanded=True) as status:
@@ -710,7 +709,6 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
                 webpage_download(website_url.strip(), input_video)
                 st.write('🎧 2/6 កំពុងយកសំឡេង និង Word Timing...')
                 extract_audio(input_video, source_audio)
-                website_extract_stereo_audio(input_video, original_stereo)
                 transcription = transcribe(client, source_audio, website_source if website_source != 'Auto' else None)
                 words = words_from(transcription)
                 if not words:
@@ -722,9 +720,9 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
                 total = max((x['end'] for x in groups), default=audio_duration(source_audio))
                 voice = website_voice_options[website_target][website_voice_label]
                 dub_audio = make_dubbing_audio(translated, voice, temp_dir, total)
-                st.write('🎵 5/6 កំពុងរក្សាភ្លេង និងកាត់សំឡេងនិយាយដើម...')
+                st.write('🎵 5/6 កំពុងបំបែកសំឡេងនិយាយចេញពីភ្លេង...')
                 music_dir = os.path.join(temp_dir, 'separated')
-                music_audio = website_separate_voice(original_stereo, music_dir)
+                music_audio, _ = website_separate_voice(source_audio, music_dir)
                 st.write('🎬 6/6 កំពុងបញ្ចូល ភ្លេងដើម + Dubbing...')
                 website_mix_music_and_dub(input_video, music_audio, dub_audio, output_video)
                 status.update(label='✅ Website Dubbing រួចរាល់!', state='complete')
@@ -732,7 +730,7 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
             with open(output_video, 'rb') as f:
                 website_result = f.read()
             st.download_button('📥 Download Website Dubbing', website_result, file_name='Smey_Website_Dubbing.mp4', mime='video/mp4', key='download_website_dubbing')
-            st.info('🎵 Website Dubbing ប្រើ Original Stereo Audio ដើម្បីកាត់សំឡេងនិយាយដែលនៅកណ្ដាល និងរក្សា Background Music/Ambience មុនដាក់ Dubbing ខ្មែរ។')
+            st.info('🎵 ភ្លេង/សំឡេង Background ដើមត្រូវបានរក្សា ហើយសំឡេងនិយាយដើមត្រូវបានបំបែកចេញដោយ Demucs មុនដាក់ Dubbing ថ្មី។')
         except Exception as e:
             st.error(f'❌ Website Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
