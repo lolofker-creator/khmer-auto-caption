@@ -472,361 +472,48 @@ def page_media_download(page_url, output_path):
             pass
     raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
 
-def resolve_page_url(url):
-    url = url.strip()
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36'})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return r.geturl() or url
-    except Exception:
-        return url
-
-def tikwm_download(page_url, output_path):
-    """TikTok fallback through TikWM. Try GET first, then POST."""
-    host = urllib.parse.urlparse(page_url).netloc.lower()
-    if 'tiktok.com' not in host:
-        return None
-
-    # TikWM documents both GET and POST and accepts vt.tiktok.com short links.
-    # Short links sometimes need a few seconds before the redirect is ready.
-    time.sleep(3)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
-        'Accept': 'application/json,text/plain,*/*',
-        'Referer': 'https://www.tikwm.com/',
-    }
-    errors = []
-
-    for base in ('https://www.tikwm.com/api/', 'https://tikwm.com/api/'):
-        # Method 1: GET (TikWM's documented simple form)
-        try:
-            qs = urllib.parse.urlencode({'url': page_url, 'hd': '1'})
-            req = urllib.request.Request(base + '?' + qs, headers=headers, method='GET')
-            with urllib.request.urlopen(req, timeout=45) as r:
-                raw = r.read().decode('utf-8', errors='ignore')
-            data = json.loads(raw)
-            if data.get('code') == 0 and data.get('data'):
-                media = data['data']
-                media_urls = [
-                    media.get('hdplay'), media.get('play'), media.get('wmplay'),
-                    media.get('video'), media.get('download')
-                ]
-                for media_url in media_urls:
-                    if media_url:
-                        try:
-                            req2 = urllib.request.Request(media_url, headers={**headers, 'Referer': 'https://www.tikwm.com/'})
-                            with urllib.request.urlopen(req2, timeout=90) as r, open(output_path, 'wb') as f:
-                                while True:
-                                    chunk = r.read(1024 * 1024)
-                                    if not chunk:
-                                        break
-                                    f.write(chunk)
-                            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
-                                return output_path
-                        except Exception as e:
-                            errors.append('media GET: ' + str(e)[-500:])
-            else:
-                errors.append('GET API: ' + str(data.get('msg') or data)[:700])
-        except Exception as e:
-            errors.append('GET: ' + str(e)[-700:])
-
-        # Method 2: POST
-        try:
-            form = urllib.parse.urlencode({'url': page_url, 'hd': '1'}).encode()
-            req = urllib.request.Request(
-                base, data=form,
-                headers={**headers, 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=45) as r:
-                data = json.loads(r.read().decode('utf-8', errors='ignore'))
-            if data.get('code') == 0 and data.get('data'):
-                media = data['data']
-                for media_url in (media.get('hdplay'), media.get('play'), media.get('wmplay'), media.get('video'), media.get('download')):
-                    if media_url:
-                        try:
-                            req2 = urllib.request.Request(media_url, headers={**headers, 'Referer': 'https://www.tikwm.com/'})
-                            with urllib.request.urlopen(req2, timeout=90) as r, open(output_path, 'wb') as f:
-                                while True:
-                                    chunk = r.read(1024 * 1024)
-                                    if not chunk:
-                                        break
-                                    f.write(chunk)
-                            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
-                                return output_path
-                        except Exception as e:
-                            errors.append('media POST: ' + str(e)[-500:])
-            else:
-                errors.append('POST API: ' + str(data.get('msg') or data)[:700])
-        except Exception as e:
-            errors.append('POST: ' + str(e)[-700:])
-
-    raise RuntimeError('TikWM មិនអាចទាញបាន: ' + ' | '.join(errors[-3:]))
-
-def _download_from_url(media_url, output_path, referer='https://www.tiktok.com/'):
-    req = urllib.request.Request(media_url, headers={
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36',
-        'Referer': referer,
-        'Accept': '*/*',
-    })
-    with urllib.request.urlopen(req, timeout=120) as r, open(output_path, 'wb') as f:
-        while True:
-            chunk = r.read(1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-    if not os.path.isfile(output_path) or os.path.getsize(output_path) < 1024:
-        raise RuntimeError('Media file ទទេ ឬតូចពេក')
-    return output_path
-
-def clipx_download(page_url, output_path):
-    """Public ClipX resolver; avoids direct TikTok access from Streamlit IP."""
-    api = 'https://clipx.zamdev.workers.dev/?' + urllib.parse.urlencode({
-        'url': page_url, 'quality': 'best', 'audio': 'true', 'cover': 'false',
-        'metadata': 'false', 'meta': 'false', 'cache': 'true', 'trace': 'false',
-        'processing_time': 'false', 'contact': 'false'
-    })
-    req = urllib.request.Request(api, headers={
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
-        'Accept': 'application/json',
-    })
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = json.loads(r.read().decode('utf-8', errors='ignore'))
-    if not data.get('success'):
-        raise RuntimeError(str(data.get('error') or 'ClipX មិនអាច Resolve Link បាន'))
-    video = ((data.get('data') or {}).get('video') or {})
-    media_url = video.get('hd_mp4') or video.get('standard_mp4') or video.get('wmplay')
-    if not media_url:
-        raise RuntimeError('ClipX រកមិនឃើញ MP4')
-    return _download_from_url(media_url, output_path, 'https://clipx.zamdev.workers.dev/')
-
-def tdown_download(page_url, output_path):
-    """Public Cloudflare-worker resolver fallback."""
-    api = 'https://tdownv4.sl-bjs.workers.dev/?' + urllib.parse.urlencode({'down': page_url})
-    req = urllib.request.Request(api, headers={
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
-        'Accept': 'application/json,text/plain,*/*',
-    })
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = json.loads(r.read().decode('utf-8', errors='ignore'))
-    media_url = data.get('download_url')
-    if not media_url:
-        media = data.get('data') or {}
-        media_url = media.get('download_url') or media.get('hdplay') or media.get('play') or media.get('video')
-    if not media_url:
-        raise RuntimeError(str(data.get('error') or data.get('message') or 'TDown រកមិនឃើញ MP4'))
-    return _download_from_url(media_url, output_path, 'https://tdownv4.sl-bjs.workers.dev/')
-
-
-
-def clipx_any_links(page_url):
-    """Resolve TikTok to whatever public media ClipX returns: video, audio, or images."""
-    api = 'https://clipx.zamdev.workers.dev/?' + urllib.parse.urlencode({
-        'url': page_url, 'quality': 'best', 'audio': 'true', 'cover': 'true',
-        'metadata': 'false', 'meta': 'false', 'cache': 'true', 'trace': 'false',
-        'processing_time': 'false', 'contact': 'false'
-    })
-    req = urllib.request.Request(api, headers={
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
-        'Accept': 'application/json',
-    })
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = json.loads(r.read().decode('utf-8', errors='ignore'))
-    if not data.get('success'):
-        raise RuntimeError(str(data.get('error') or 'ClipX មិនអាច Resolve Link បាន'))
-    d = data.get('data') or {}
-    links = []
-    v = d.get('video') or {}
-    for label, key in [('HD Video', 'hd_mp4'), ('Standard Video', 'standard_mp4'), ('Video Watermark', 'wmplay')]:
-        u = v.get(key)
-        if u: links.append((label, u, 'video'))
-    a = d.get('audio') or {}
-    if a.get('play'): links.append(('Audio', a['play'], 'audio'))
-    for i,u in enumerate(d.get('images') or [], 1):
-        if u: links.append((f'Image {i}', u, 'image'))
-    return links
-
-def resolver_browser_links(page_url):
-    q = urllib.parse.quote(page_url, safe='')
-    return [
-        ('TikWM', f'https://www.tikwm.com/?url={q}'),
-        ('ClipX', f'https://clipx.zamdev.dev/?url={q}'),
-        ('TDown API', f'https://tdownv4.sl-bjs.workers.dev/?down={q}'),
-    ]
-
 def webpage_download(page_url, output_path):
-    page_url = page_url.strip()
-    resolved_url = resolve_page_url(page_url)
-    candidates = []
-    for u in (page_url, resolved_url):
-        if u and u not in candidates:
-            candidates.append(u)
-
-    for u in candidates:
-        if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv|avi|ts)(?:\?|$)', u, re.I):
-            try:
-                return download_media_url(u, output_path)
-            except Exception:
-                pass
-
-    last_errors = []
-    is_tiktok = any('tiktok.com' in urllib.parse.urlparse(u).netloc.lower() for u in candidates)
-
-    # TikTok: use external resolvers first because Streamlit Cloud IP can be blocked by TikTok.
-    if is_tiktok:
-        for resolver_name, resolver in (
-            ('ClipX', clipx_download),
-            ('TDown', tdown_download),
-            ('TikWM', tikwm_download),
-        ):
-            for u in candidates:
-                try:
-                    result = resolver(u, output_path)
-                    if result and os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
-                        return result
-                except Exception as e:
-                    last_errors.append(f'{resolver_name}: {str(e)[-1000:]}')
-
-    for u in candidates:
-        host = urllib.parse.urlparse(u).netloc.lower()
+    # Direct video URL
+    if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', page_url, re.I):
         try:
-            import yt_dlp
-            options = {
-                'outtmpl': output_path,
-                'format': 'best[ext=mp4]/bestvideo*+bestaudio/best',
-                'merge_output_format': 'mp4',
-                'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
-                'nocheckcertificate': True,
-                'geo_bypass': True,
-                'ffmpeg_location': ffmpeg(),
-                'retries': 5,
-                'fragment_retries': 5,
-                'file_access_retries': 5,
-                'socket_timeout': 45,
-            }
-            with yt_dlp.YoutubeDL(options) as ydl:
-                ydl.download([u])
-            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+            return download_media_url(page_url, output_path)
+        except Exception:
+            pass
+
+    # Supported sites
+    try:
+        import yt_dlp
+        options = {
+            'outtmpl': output_path,
+            'format': 'bv*+ba/b',
+            'merge_output_format': 'mp4',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'ffmpeg_location': ffmpeg(),
+            'retries': 5,
+            'fragment_retries': 5,
+            'socket_timeout': 30,
+        }
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([page_url])
+        if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        base = os.path.splitext(output_path)[0]
+        for ext in ('.mp4', '.webm', '.mkv'):
+            candidate = base + ext
+            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                if candidate != output_path:
+                    os.replace(candidate, output_path)
                 return output_path
-            base = os.path.splitext(output_path)[0]
-            for ext in ('.mp4', '.webm', '.mkv', '.mov', '.ts'):
-                candidate = base + ext
-                if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                    if candidate != output_path:
-                        os.replace(candidate, output_path)
-                    return output_path
-        except Exception as e:
-            last_errors.append('yt-dlp: ' + str(e)[-1800:])
+    except Exception:
+        pass
 
-    try:
-        return page_media_download(resolved_url, output_path)
-    except Exception as e:
-        last_errors.append('HTML: ' + str(e)[-1200:])
+    # Public pages containing a media URL
+    return page_media_download(page_url, output_path)
 
-    raise RuntimeError(
-        'Server មិនអាចទាញ Media ពី Link នេះបានទេ។\n'
-        f'Link: {resolved_url}\n\n' + '\n---\n'.join(last_errors[-5:])
-    )
-
-with st.expander('🎬 Short Drama — Download All Episodes'):
-    st.caption('ដាក់ Link ភាគណាមួយ → បើក Short Drama Finder → រករឿងទាំងមូល និង Download ជា ZIP។')
-    drama_url = st.text_input('🔗 Link ភាគ Short Drama', placeholder='https://vt.tiktok.com/...', key='short_drama_url')
-    if drama_url.strip():
-        if 'tiktok.com' in drama_url.lower():
-            st.link_button('🎬 បើក Short Drama Finder', 'https://dramascout.app/', use_container_width=True)
-            st.info('ℹ️ នៅលើ Short Drama Finder សូម Paste Link នេះ → Identify → ជ្រើស Download ទាំងរឿង។')
-            st.code(drama_url.strip(), language='text')
-        else:
-            st.warning('សូមដាក់ TikTok Link របស់ភាគ Short Drama។')
-    else:
-        st.link_button('🎬 បើក Short Drama Finder', 'https://dramascout.app/', use_container_width=True)
-
-with st.expander('⬇️ Download Video'):
-    page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
-    if st.button('⬇️ Download'):
-        if not page_url.strip():
-            st.warning('សូមដាក់ Link ជាមុន')
-        else:
-            try:
-                with st.spinner('កំពុងរកវីដេអូ និង Download...'):
-                    output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                    output.close()
-                    webpage_download(page_url.strip(), output.name)
-                st.success('✅ Download រួចរាល់')
-                st.video(output.name)
-                with open(output.name, 'rb') as f:
-                    video_data = f.read()
-                st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
-            except Exception as e:
-                st.error(f'❌ Download មិនបាន:\n{e}')
-
-                if 'tiktok.com' in page_url.lower():
-                    st.warning('⚠️ Server មិនអាចយក file មកកាន់ Streamlit បាន ប៉ុន្តែអាចបង្កើត Direct Download Link បាន។')
-                    try:
-                        direct_links = clipx_any_links(page_url.strip())
-                        if direct_links:
-                            st.success('✅ រកឃើញ Media — ចុចខាងក្រោមដើម្បី Download ដោយផ្ទាល់')
-                            for label, media_url, kind in direct_links:
-                                icon = '🎬' if kind == 'video' else ('🎵' if kind == 'audio' else '🖼️')
-                                st.link_button(f'{icon} Download {label}', media_url, use_container_width=True)
-                        else:
-                            st.warning('មិនរកឃើញ Media URL ទេ។')
-                    except Exception as direct_error:
-                        st.error(f'❌ Direct Download Resolver: {direct_error}')
-                    st.caption('ℹ️ អាចជា Video / Audio / Image — មិនកំណត់តែ MP4 ទេ។')
-
-with st.expander('🎙️ Text → Free Voice'):
-    tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
-    tts_language = st.selectbox('ភាសាសំឡេង', ['Khmer', 'Chinese', 'English'], key='tts_language')
-    tts_lang_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
-    if st.button('🎙️ Generate Voice', key='free_tts_button'):
-        if not tts_text.strip():
-            st.warning('សូមបញ្ចូលអត្ថបទជាមុន')
-        else:
-            try:
-                output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                output.close()
-                with st.spinner('កំពុងបង្កើតសំឡេង Free...'):
-                    free_tts(tts_text, output.name, tts_lang_map[tts_language])
-                with open(output.name, 'rb') as f:
-                    audio_data = f.read()
-                st.audio(audio_data, format='audio/mp3')
-                st.download_button('📥 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
-            except Exception as e:
-                st.error(f'❌ Voice Error: {e}')
-with st.expander('📱 APK'):
-    try:
-        apk_name, apk_data = apk_download()
-        if apk_data and apk_name:
-            st.success(f'📦 {apk_name}')
-            st.download_button('⬇️ Download APK', apk_data, file_name=apk_name, mime='application/vnd.android.package-archive', use_container_width=True, key='apk_download')
-        else:
-            st.info('មិនទាន់មាន APK')
-    except Exception as e:
-        st.warning(f'⚠️ APK Storage: {e}')
-
-    with st.expander('👑 Admin'):
-        password=st.text_input('🔐 Password',type='password',key='apk_password')
-        uploaded=st.file_uploader('📤 Upload APK',type=['apk'],key='apk_file')
-        custom=st.text_input('✏️ ឈ្មោះ APK',placeholder='ឧ. Smey AI VIP 1',key='apk_name_input')
-        if st.button('⬆️ Upload APK',use_container_width=True,key='apk_upload_button'):
-            admin=secret('APK_ADMIN_PASSWORD')
-            if not admin: st.error('សូមកំណត់ APK_ADMIN_PASSWORD ក្នុង Secrets')
-            elif password != admin: st.error('❌ Password មិនត្រឹមត្រូវ')
-            elif not uploaded: st.warning('⚠️ សូមជ្រើស APK')
-            else:
-                name=re.sub(r'[\\/:*?"<>|]','',custom.strip() or os.path.splitext(uploaded.name)[0]).strip() or 'app'
-                if not name.lower().endswith('.apk'): name += '.apk'
-                try:
-                    with st.spinner('កំពុង Upload APK ទៅ Supabase...'):
-                        apk_upload(name,uploaded.getvalue())
-                    st.success(f'✅ Upload រួចរាល់: {name}')
-                    st.rerun()
-                except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
-
-st.divider()
+st.title('🇰🇭 Smey AI Dubbing')
+st.caption('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing')
 api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
     st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
@@ -880,57 +567,3 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
-st.divider()
-st.subheader('🎬 Auto Caption')
-api_key = get_api_key()
-source_language = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'])
-target_language = st.selectbox('ភាសា Caption', ['Khmer', 'Chinese', 'No translation'])
-uploaded_video = st.file_uploader('📤 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
-if uploaded_video:
-    st.video(uploaded_video)
-if st.button('🚀 Auto Caption', type='primary'):
-    if not api_key:
-        st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-        st.stop()
-    if not uploaded_video:
-        st.warning('សូម Upload Video ជាមុន')
-        st.stop()
-    client = get_gemini_client(api_key)
-    temp_dir = tempfile.mkdtemp()
-    input_video = os.path.join(temp_dir, 'input.mp4')
-    audio_path = os.path.join(temp_dir, 'audio.wav')
-    ass_path = os.path.join(temp_dir, 'captions.ass')
-    output_video = os.path.join(temp_dir, 'Smey_Auto_Caption.mp4')
-    try:
-        with open(input_video, 'wb') as f:
-            f.write(uploaded_video.getbuffer())
-        with st.status('កំពុងដំណើរការ Auto Caption...', expanded=True) as status:
-            st.write('🎧 1/5 កំពុងយកសំឡេងពីវីដេអូ...')
-            extract_audio(input_video, audio_path)
-            st.write('📝 2/5 កំពុងស្តាប់ និងកំណត់ Word Timing...')
-            transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
-            words = words_from(transcription)
-            if not words:
-                raise RuntimeError('Gemini មិនបានផ្តល់ Word Timing។ សូមសាកល្បងម្តងទៀត។')
-            groups = make_groups(words)
-            full_text = ' '.join((item['text'] for item in groups))
-            detected = detect_language(full_text)
-            st.write(f'🌐 ភាសាដែលបានរកឃើញ: **{detected}**')
-            st.write('🔄 3/5 កំពុងបកប្រែ Caption...')
-            final_groups = translate_groups(client, groups, target_language)
-            st.write('🎞️ 4/5 កំពុងបង្កើត Caption...')
-            make_ass(final_groups, ass_path)
-            st.write('🔥 5/5 កំពុងបញ្ចូល Caption ទៅក្នុង MP4...')
-            burn(input_video, ass_path, output_video)
-            status.update(label='✅ Auto Caption រួចរាល់!', state='complete')
-        st.success(f'រកឃើញ {len(final_groups)} Caption')
-        st.subheader('📝 Caption Preview')
-        for item in final_groups:
-            st.write(f"`{ass_time(item['start'])} → {ass_time(item['end'])}`  {item['text']}")
-        st.subheader('🎬 Result')
-        st.video(output_video)
-        with open(output_video, 'rb') as f:
-            caption_data = f.read()
-        st.download_button('📥 Download MP4', caption_data, file_name='Smey_Auto_Caption.mp4', mime='video/mp4', on_click='ignore')
-    except Exception as e:
-        st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
