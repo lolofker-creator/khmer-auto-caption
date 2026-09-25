@@ -473,32 +473,45 @@ def page_media_download(page_url, output_path):
     raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
 
 def webpage_download(page_url, output_path):
-    # Direct video URL
+    page_url = page_url.strip()
+
+    # Direct media URL
     if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', page_url, re.I):
         try:
             return download_media_url(page_url, output_path)
         except Exception:
             pass
 
-    # Supported sites
+    # TikTok / short TikTok links — use yt-dlp directly.
+    is_tiktok = bool(re.search(r'(?:^|\.)tiktok\.com$', urllib.parse.urlparse(page_url).netloc.lower())) or 'vt.tiktok.com' in page_url.lower()
+
     try:
         import yt_dlp
         options = {
             'outtmpl': output_path,
-            'format': 'bv*+ba/b',
+            'format': 'bv[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b',
             'merge_output_format': 'mp4',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            'nocheckcertificate': True,
+            'geo_bypass': True,
             'ffmpeg_location': ffmpeg(),
-            'retries': 5,
-            'fragment_retries': 5,
-            'socket_timeout': 30,
+            'retries': 8,
+            'fragment_retries': 8,
+            'file_access_retries': 5,
+            'socket_timeout': 45,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
+                'Referer': 'https://www.tiktok.com/' if is_tiktok else page_url,
+            },
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([page_url])
+
         if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
             return output_path
+
         base = os.path.splitext(output_path)[0]
         for ext in ('.mp4', '.webm', '.mkv'):
             candidate = base + ext
@@ -506,8 +519,9 @@ def webpage_download(page_url, output_path):
                 if candidate != output_path:
                     os.replace(candidate, output_path)
                 return output_path
-    except Exception:
-        pass
+    except Exception as e:
+        if is_tiktok:
+            raise RuntimeError('TikTok Download មិនបាន: ' + str(e)[-1200:]) from e
 
     # Public pages containing a media URL
     return page_media_download(page_url, output_path)
@@ -579,208 +593,6 @@ with st.expander('📱 APK'):
                     st.success(f'✅ Upload រួចរាល់: {name}')
                     st.rerun()
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
-
-
-
-# ============================================================
-# 🌐 NEW FEATURE ONLY: Website Link → Translate → Dubbing
-# IMPORTANT: Existing features/functions above and below are untouched.
-# ============================================================
-def website_translate_groups(client, groups, target_language):
-    """Website translation with safe fallback: if a batch returns the wrong count,
-    translate the lines one-by-one so one bad Gemini response cannot stop the job.
-    """
-    if not groups or target_language == 'No translation':
-        return groups
-
-    result = []
-    batch_size = 12
-
-    def translate_one(text):
-        prompt = (
-            f'Translate this spoken subtitle into {target_language}.\n'
-            'Return ONLY the translated sentence. Do not explain anything.\n\n'
-            f'{text}'
-        )
-        def call():
-            return client.models.generate_content(
-                model=TRANSLATE_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.1),
-            )
-        response = retry_gemini(call)
-        raw = (get_value(response, 'text', '') or '').strip()
-        if not raw:
-            raise RuntimeError('Gemini មិនបានបញ្ជូន Translation')
-        # Keep only the first non-empty line if the model adds an accidental extra line.
-        lines = [x.strip() for x in raw.splitlines() if x.strip()]
-        if not lines:
-            raise RuntimeError('Translation ទទេ')
-        return re.sub(r'^\s*\d+[.)]\s*', '', lines[0]).strip()
-
-    for start in range(0, len(groups), batch_size):
-        batch = groups[start:start + batch_size]
-        texts = [item['text'] for item in batch]
-        prompt = (
-            f'Translate each input line into {target_language}.\n'
-            'Return EXACTLY one translated line for EACH input line, in the same order.\n'
-            'Never merge, omit, summarize, or add lines.\n\n'
-            f'{json.dumps(texts, ensure_ascii=False)}'
-        )
-        schema = types.Schema(
-            type=types.Type.ARRAY,
-            items=types.Schema(type=types.Type.STRING),
-        )
-
-        values = None
-        try:
-            def call_batch():
-                return client.models.generate_content(
-                    model=TRANSLATE_MODEL,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type='application/json',
-                        response_schema=schema,
-                        temperature=0.1,
-                    ),
-                )
-            response = retry_gemini(call_batch)
-            values = get_value(response, 'parsed', None)
-            if values is None:
-                raw = (get_value(response, 'text', '') or '').strip()
-                try:
-                    values = json.loads(raw)
-                except Exception:
-                    values = None
-            if not isinstance(values, list) or len(values) != len(batch):
-                values = None
-        except Exception:
-            values = None
-
-        # If Gemini returns 7/9/11 lines instead of the required count,
-        # retry each subtitle separately instead of stopping the whole job.
-        if values is None:
-            values = []
-            for item in batch:
-                try:
-                    values.append(translate_one(item['text']))
-                except Exception:
-                    # Keep the original line rather than breaking the whole video.
-                    values.append(item['text'])
-
-        for item, text in zip(batch, values):
-            result.append({
-                'text': str(text).strip() or item['text'],
-                'start': item['start'],
-                'end': item['end'],
-            })
-
-    return result
-
-
-def website_separate_voice(audio_path, out_dir):
-    """Use Demucs when installed to keep accompaniment/music and remove dialogue."""
-    try:
-        import demucs  # noqa: F401
-    except Exception:
-        raise RuntimeError(
-            'Website Dubbing ត្រូវការ Demucs សម្រាប់បំបែកសំឡេងនិយាយចេញពីភ្លេង។ '
-            'សូមបន្ថែម demucs ទៅ requirements.txt រួច Deploy ម្តងទៀត។'
-        )
-    os.makedirs(out_dir, exist_ok=True)
-    cmd = [
-        'python', '-m', 'demucs.separate',
-        '-n', 'htdemucs',
-        '--two-stems=vocals',
-        '-o', out_dir,
-        audio_path,
-    ]
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if r.returncode != 0:
-        raise RuntimeError('Demucs បំបែកសំឡេងមិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-4000:])
-    base = os.path.splitext(os.path.basename(audio_path))[0]
-    instrumental = os.path.join(out_dir, 'htdemucs', base, 'no_vocals.wav')
-    vocals = os.path.join(out_dir, 'htdemucs', base, 'vocals.wav')
-    if not os.path.isfile(instrumental):
-        raise RuntimeError('រកមិនឃើញភ្លេងក្រោយពេលបំបែកសំឡេង')
-    return instrumental, vocals
-
-
-def website_mix_music_and_dub(video_path, music_path, dub_audio, output_path):
-    """Keep original accompaniment/music and mix the new dubbed voice over it."""
-    cmd = [
-        ffmpeg(), '-y',
-        '-i', video_path,
-        '-i', music_path,
-        '-i', dub_audio,
-        '-filter_complex',
-        '[1:a]volume=0.55[music];[2:a]volume=1.15[dub];'
-        '[music][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]',
-        '-map', '0:v:0', '-map', '[mix]',
-        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
-        '-shortest', '-movflags', '+faststart', output_path
-    ]
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if r.returncode != 0:
-        raise RuntimeError('Mix ភ្លេង + Dubbing មិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-5000:])
-    return output_path
-
-
-website_api_key = get_api_key()
-
-with st.expander('🌐 Website Link → Auto Dubbing'):
-    st.caption('ដាក់ Link ពី Website → Server ដំណើរការបណ្ដោះអាសន្ន → បកប្រែ → Dubbing។ មិនបាច់ Download → Upload មកវិញទេ។')
-    website_url = st.text_input('🔗 ដាក់ Link Website', placeholder='https://...')
-    website_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='website_dub_source')
-    website_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='website_dub_target')
-    website_voice_options = {
-        'Khmer': {'ប្រុស — Piseth': 'km-KH-PisethNeural', 'ស្រី — Sreymom': 'km-KH-SreymomNeural'},
-        'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
-        'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
-    }
-    website_voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(website_voice_options[website_target].keys()), key='website_dub_voice')
-    if st.button('🌐🎙️ បកប្រែ + Dubbing ពី Link', type='primary', key='website_dub_button'):
-        if not website_api_key:
-            st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-            st.stop()
-        if not website_url.strip():
-            st.warning('សូមដាក់ Link ជាមុន')
-            st.stop()
-        client = get_gemini_client(website_api_key)
-        temp_dir = tempfile.mkdtemp()
-        input_video = os.path.join(temp_dir, 'website_input.mp4')
-        source_audio = os.path.join(temp_dir, 'website_source.wav')
-        output_video = os.path.join(temp_dir, 'Smey_Website_Dubbing.mp4')
-        try:
-            with st.status('កំពុងដំណើរការ Website Dubbing...', expanded=True) as status:
-                st.write('🌐 1/6 កំពុងយកវីដេអូពី Link ទៅ Server...')
-                webpage_download(website_url.strip(), input_video)
-                st.write('🎧 2/6 កំពុងយកសំឡេង និង Word Timing...')
-                extract_audio(input_video, source_audio)
-                transcription = transcribe(client, source_audio, website_source if website_source != 'Auto' else None)
-                words = words_from(transcription)
-                if not words:
-                    raise RuntimeError('រកមិនឃើញ Word Timing ពី Link នេះ')
-                groups = make_groups(words)
-                st.write('🔄 3/6 កំពុងបកប្រែ...')
-                translated = website_translate_groups(client, groups, website_target)
-                st.write('🎙️ 4/6 កំពុងបង្កើត Dubbing...')
-                total = max((x['end'] for x in groups), default=audio_duration(source_audio))
-                voice = website_voice_options[website_target][website_voice_label]
-                dub_audio = make_dubbing_audio(translated, voice, temp_dir, total)
-                st.write('🎵 5/6 កំពុងបំបែកសំឡេងនិយាយចេញពីភ្លេង...')
-                music_dir = os.path.join(temp_dir, 'separated')
-                music_audio, _ = website_separate_voice(source_audio, music_dir)
-                st.write('🎬 6/6 កំពុងបញ្ចូល ភ្លេងដើម + Dubbing...')
-                website_mix_music_and_dub(input_video, music_audio, dub_audio, output_video)
-                status.update(label='✅ Website Dubbing រួចរាល់!', state='complete')
-            st.video(output_video)
-            with open(output_video, 'rb') as f:
-                website_result = f.read()
-            st.download_button('📥 Download Website Dubbing', website_result, file_name='Smey_Website_Dubbing.mp4', mime='video/mp4', key='download_website_dubbing')
-            st.info('🎵 ភ្លេង/សំឡេង Background ដើមត្រូវបានរក្សា ហើយសំឡេងនិយាយដើមត្រូវបានបំបែកចេញដោយ Demucs មុនដាក់ Dubbing ថ្មី។')
-        except Exception as e:
-            st.error(f'❌ Website Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
 st.divider()
 api_key = get_api_key()
