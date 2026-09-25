@@ -489,58 +489,77 @@ def webpage_download(page_url, output_path):
         if u and u not in candidates:
             candidates.append(u)
 
-    # Direct media URL
+    # Direct media URL first
     for u in candidates:
-        if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', u, re.I):
+        if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv|avi|ts)(?:\?|$)', u, re.I):
             try:
                 return download_media_url(u, output_path)
             except Exception:
                 pass
 
-    last_error = None
+    last_errors = []
     for u in candidates:
         host = urllib.parse.urlparse(u).netloc.lower()
-        is_tiktok = host.endswith('tiktok.com') or host.endswith('.tiktok.com')
+        is_tiktok = 'tiktok.com' in host
         try:
             import yt_dlp
+            ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
             options = {
                 'outtmpl': output_path,
-                'format': 'bv*+ba/b',
+                'format': 'best[ext=mp4]/bestvideo*+bestaudio/best',
                 'merge_output_format': 'mp4',
                 'noplaylist': True,
                 'quiet': True,
                 'no_warnings': True,
                 'nocheckcertificate': True,
                 'geo_bypass': True,
+                'check_formats': True,
                 'ffmpeg_location': ffmpeg(),
-                'retries': 8,
-                'fragment_retries': 8,
-                'file_access_retries': 5,
-                'socket_timeout': 45,
+                'retries': 10,
+                'fragment_retries': 10,
+                'file_access_retries': 10,
+                'socket_timeout': 60,
+                'concurrent_fragment_downloads': 1,
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
+                    'User-Agent': ua,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
                     'Referer': 'https://www.tiktok.com/' if is_tiktok else u,
                 },
             }
+            if is_tiktok:
+                options['extractor_args'] = {
+                    'tiktok': {
+                        'app_name': ['musical_ly'],
+                        'app_version': ['35.1.3'],
+                        'manifest_app_version': ['2023501030'],
+                        'aid': ['0'],
+                    }
+                }
             with yt_dlp.YoutubeDL(options) as ydl:
                 ydl.download([u])
             if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
                 return output_path
             base = os.path.splitext(output_path)[0]
-            for ext in ('.mp4', '.webm', '.mkv'):
+            for ext in ('.mp4', '.webm', '.mkv', '.mov', '.ts'):
                 candidate = base + ext
                 if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
                     if candidate != output_path:
                         os.replace(candidate, output_path)
                     return output_path
         except Exception as e:
-            last_error = str(e)
+            last_errors.append(str(e)[-2500:])
 
+    # Last fallback: look for media URLs embedded in the page HTML
     try:
         return page_media_download(resolved_url, output_path)
     except Exception as e:
-        last_error = str(e)
-    raise RuntimeError(f'Download មិនបាន។ Link ដែល Server រកឃើញ: {resolved_url}\n{last_error or "មិនមាន media URL"}')
+        last_errors.append(str(e)[-2500:])
+
+    raise RuntimeError(
+        'Server មិនអាចទាញ Media ពី Link នេះបានទេ។\n'
+        f'Link: {resolved_url}\n\n' + '\n---\n'.join(last_errors[-3:])
+    )
 
 with st.expander('⬇️ Download Video'):
     page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
@@ -549,17 +568,17 @@ with st.expander('⬇️ Download Video'):
             st.warning('សូមដាក់ Link ជាមុន')
         else:
             try:
-                with st.spinner('កំពុង Download...'):
+                with st.spinner('កំពុងរកវីដេអូ និង Download...'):
                     output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                     output.close()
                     webpage_download(page_url.strip(), output.name)
-                st.success('✅ រួចរាល់')
+                st.success('✅ Download រួចរាល់')
                 st.video(output.name)
                 with open(output.name, 'rb') as f:
                     video_data = f.read()
                 st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
             except Exception as e:
-                st.error(f'❌ Download មិនបាន: {e}')
+                st.error(f'❌ Download មិនបាន:\n{e}')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
