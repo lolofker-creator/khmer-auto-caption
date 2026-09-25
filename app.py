@@ -256,32 +256,64 @@ def translate_groups(client, groups, target_language):
     if not groups or target_language == 'No translation':
         return groups
     translated = []
-    batch_size = 15
+    batch_size = 10
     for start in range(0, len(groups), batch_size):
         batch = groups[start:start + batch_size]
-        texts = [item['text'] for item in batch]
-        prompt = f'Translate each subtitle line into {target_language}.\nReturn exactly one translated line per input line, in the same order. Do not add explanations. Keep names and numbers accurate.\n\nInput:\n{texts}'
-        schema = types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING))
-
-        def call():
-            return client.models.generate_content(model=TRANSLATE_MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=schema))
-        try:
-            response = retry_gemini(call)
-            values = get_value(response, 'parsed', None)
-            if values is None:
-                raw = get_value(response, 'text', '') or ''
-                try:
-                    values = json.loads(raw)
-                except Exception:
-                    values = []
-            if not isinstance(values, list) or len(values) != len(batch):
-                raise RuntimeError('Translation response មិនត្រឹមត្រូវ')
-        except Exception as exc:
-            st.warning('⚠️ Gemini Translation មិនទាន់អាចប្រើបាន។ Caption នឹងរក្សាភាសាដើមសម្រាប់ផ្នែកនេះ។')
-            values = [item['text'] for item in batch]
+        lines = [item['text'].replace('\n', ' ').strip() for item in batch]
+        numbered = '\n'.join(f'{i+1}. {text}' for i, text in enumerate(lines))
+        prompt = (
+            f'Translate the following spoken-dialogue lines into natural {target_language}.\n'
+            'Return ONLY a JSON array of strings. Exactly one output string for each numbered input line, same order.\n'
+            'Do not explain anything. Do not omit lines. Preserve names, numbers and meaning.\n\n'
+            f'{numbered}'
+        )
+        values = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=TRANSLATE_MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        max_output_tokens=4096,
+                    ),
+                )
+                raw = (get_value(response, 'text', '') or '').strip()
+                raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.I).strip()
+                values = json.loads(raw)
+                if not isinstance(values, list) or len(values) != len(batch):
+                    raise ValueError('Translation response មិនត្រឹមត្រូវ')
+                values = [str(v).strip() for v in values]
+                break
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.8)
+        if values is None:
+            # Fallback: ask for one line per input without JSON/schema, then split.
+            try:
+                response = client.models.generate_content(
+                    model=TRANSLATE_MODEL,
+                    contents=(
+                        f'Translate each line below into natural {target_language}. '
+                        'Return exactly one translated line per input line, no numbering, no explanation.\n\n'
+                        + '\n'.join(lines)
+                    ),
+                    config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=4096),
+                )
+                raw_lines = [x.strip() for x in (get_value(response, 'text', '') or '').splitlines() if x.strip()]
+                raw_lines = [re.sub(r'^\s*\d+[.)]\s*', '', x).strip() for x in raw_lines]
+                if len(raw_lines) == len(batch):
+                    values = raw_lines
+            except Exception as exc:
+                last_error = exc
+        if values is None:
+            st.warning(f'⚠️ Gemini Translation មិនទាន់បានសម្រេចសម្រាប់ផ្នែក {start+1}–{start+len(batch)}។')
+            values = lines
         for index, item in enumerate(batch):
-            translated.append({'text': str(values[index]), 'start': item['start'], 'end': item['end']})
+            translated.append({'text': values[index], 'start': item['start'], 'end': item['end']})
     return translated
+
 ASS_HEADER = '[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,55,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 
 def make_ass(groups, ass_path):
@@ -476,11 +508,38 @@ def make_dubbing_audio(groups, voice, temp_dir, total_duration):
     if r.returncode!=0: raise RuntimeError(r.stderr.decode('utf-8',errors='ignore')[-4000:])
     return out
 
+def extract_music_without_dialogue(video_path, output_audio):
+    # Stereo: cancel center-panned dialogue while retaining side/background music.
+    # Mono: keep only a quiet background bed so the original speech does not dominate.
+    probe = subprocess.run([ffmpeg(), '-i', video_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    info = probe.stderr.decode('utf-8', errors='ignore')
+    stereo = bool(re.search(r'Audio:.*(?:stereo|2 channels)', info, re.I))
+    if stereo:
+        af = 'pan=stereo|FL=0.5*FL-0.5*FR|FR=0.5*FR-0.5*FL,volume=1.15'
+    else:
+        af = 'volume=0.10'
+    cmd=[ffmpeg(), '-y', '-i', video_path, '-vn', '-af', af, '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', output_audio]
+    r=subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        raise RuntimeError('មិនអាចរក្សាភ្លេង Background បាន: ' + r.stderr.decode('utf-8', errors='ignore')[-3000:])
+    return output_audio
+
 def replace_video_audio(video_path, dubbing_audio, output_path):
-    cmd=[ffmpeg(),'-y','-i',video_path,'-i',dubbing_audio,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output_path]
-    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    if r.returncode!=0: raise RuntimeError('ប្ដូរសំឡេង Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
+    temp_dir=os.path.dirname(output_path)
+    music_audio=os.path.join(temp_dir, 'background_music.wav')
+    extract_music_without_dialogue(video_path, music_audio)
+    cmd=[
+        ffmpeg(), '-y', '-i', video_path, '-i', music_audio, '-i', dubbing_audio,
+        '-filter_complex',
+        '[1:a]volume=0.75[music];[2:a]volume=1.25[dub];'
+        '[music][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]',
+        '-map','0:v:0','-map','[aout]','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output_path
+    ]
+    r=subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        raise RuntimeError('បញ្ចូលភ្លេងដើម + Dubbing មិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-5000:])
     return output_path
+
 MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\s\"'<>]*)?", re.I)
 
 def find_media_urls(html):
