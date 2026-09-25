@@ -472,59 +472,75 @@ def page_media_download(page_url, output_path):
             pass
     raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
 
+def resolve_page_url(url):
+    url = url.strip()
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36'})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.geturl() or url
+    except Exception:
+        return url
+
 def webpage_download(page_url, output_path):
     page_url = page_url.strip()
+    resolved_url = resolve_page_url(page_url)
+    candidates = []
+    for u in (page_url, resolved_url):
+        if u and u not in candidates:
+            candidates.append(u)
 
     # Direct media URL
-    if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', page_url, re.I):
-        try:
-            return download_media_url(page_url, output_path)
-        except Exception:
-            pass
+    for u in candidates:
+        if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', u, re.I):
+            try:
+                return download_media_url(u, output_path)
+            except Exception:
+                pass
 
-    # TikTok / short TikTok links — use yt-dlp directly.
-    is_tiktok = bool(re.search(r'(?:^|\.)tiktok\.com$', urllib.parse.urlparse(page_url).netloc.lower())) or 'vt.tiktok.com' in page_url.lower()
+    last_error = None
+    for u in candidates:
+        host = urllib.parse.urlparse(u).netloc.lower()
+        is_tiktok = host.endswith('tiktok.com') or host.endswith('.tiktok.com')
+        try:
+            import yt_dlp
+            options = {
+                'outtmpl': output_path,
+                'format': 'bv*+ba/b',
+                'merge_output_format': 'mp4',
+                'noplaylist': True,
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'geo_bypass': True,
+                'ffmpeg_location': ffmpeg(),
+                'retries': 8,
+                'fragment_retries': 8,
+                'file_access_retries': 5,
+                'socket_timeout': 45,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
+                    'Referer': 'https://www.tiktok.com/' if is_tiktok else u,
+                },
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.download([u])
+            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+            base = os.path.splitext(output_path)[0]
+            for ext in ('.mp4', '.webm', '.mkv'):
+                candidate = base + ext
+                if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                    if candidate != output_path:
+                        os.replace(candidate, output_path)
+                    return output_path
+        except Exception as e:
+            last_error = str(e)
 
     try:
-        import yt_dlp
-        options = {
-            'outtmpl': output_path,
-            'format': 'bv[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b',
-            'merge_output_format': 'mp4',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'geo_bypass': True,
-            'ffmpeg_location': ffmpeg(),
-            'retries': 8,
-            'fragment_retries': 8,
-            'file_access_retries': 5,
-            'socket_timeout': 45,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
-                'Referer': 'https://www.tiktok.com/' if is_tiktok else page_url,
-            },
-        }
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([page_url])
-
-        if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
-            return output_path
-
-        base = os.path.splitext(output_path)[0]
-        for ext in ('.mp4', '.webm', '.mkv'):
-            candidate = base + ext
-            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                if candidate != output_path:
-                    os.replace(candidate, output_path)
-                return output_path
+        return page_media_download(resolved_url, output_path)
     except Exception as e:
-        if is_tiktok:
-            raise RuntimeError('TikTok Download មិនបាន: ' + str(e)[-1200:]) from e
-
-    # Public pages containing a media URL
-    return page_media_download(page_url, output_path)
+        last_error = str(e)
+    raise RuntimeError(f'Download មិនបាន។ Link ដែល Server រកឃើញ: {resolved_url}\n{last_error or "មិនមាន media URL"}')
 
 with st.expander('⬇️ Download Video'):
     page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
@@ -542,8 +558,8 @@ with st.expander('⬇️ Download Video'):
                 with open(output.name, 'rb') as f:
                     video_data = f.read()
                 st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
-            except Exception:
-                st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
+            except Exception as e:
+                st.error(f'❌ Download មិនបាន: {e}')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
