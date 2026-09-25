@@ -553,6 +553,7 @@ with st.expander('📱 APK'):
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
 
 st.divider()
+api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
     st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
     dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
@@ -606,7 +607,6 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
 
 st.divider()
 st.subheader('🎬 Auto Caption')
-api_key = get_api_key()
 source_language = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'])
 target_language = st.selectbox('ភាសា Caption', ['Khmer', 'Chinese', 'No translation'])
 uploaded_video = st.file_uploader('📤 Upload Video', type=['mp4', 'mov', 'mkv', 'webm', 'avi'])
