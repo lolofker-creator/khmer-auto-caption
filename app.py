@@ -9,6 +9,7 @@ import time
 import wave
 import json
 from gtts import gTTS
+import asyncio
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -341,6 +342,83 @@ def free_tts(text, output_mp3, language='km'):
     tts = gTTS(text=text, lang=language, slow=False)
     tts.save(output_mp3)
     return output_mp3
+
+def edge_tts_voice(text, output_mp3, voice):
+    try:
+        import edge_tts
+    except ImportError:
+        raise RuntimeError('សូមបន្ថែម edge-tts ក្នុង requirements.txt')
+    text = text.strip()
+    if not text:
+        raise ValueError('សូមបញ្ចូលអត្ថបទ')
+    async def run():
+        communicate = edge_tts.Communicate(text, voice, rate='+0%', pitch='+0Hz', volume='+0%')
+        await communicate.save(output_mp3)
+    asyncio.run(run())
+    return output_mp3
+
+def audio_duration(path):
+    command=[ffmpeg(), '-i', path, '-f', 'null', '-']
+    result=subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    text=result.stderr.decode('utf-8', errors='ignore')
+    m=re.search(r'Duration: (\d+):(\d+):(\d+(?:\.\d+)?)', text)
+    if not m:
+        return 0.0
+    return int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3))
+
+def fit_audio_to_duration(input_audio, output_audio, target_seconds):
+    target_seconds=max(0.15, float(target_seconds))
+    actual=audio_duration(input_audio)
+    if actual <= 0:
+        raise RuntimeError('រកមិនឃើញរយៈពេលសំឡេង Dubbing')
+    ratio=actual/target_seconds
+    # atempo accepts 0.5..2.0 per filter; chain filters for larger changes.
+    filters=[]
+    while ratio>2.0:
+        filters.append('atempo=2.0'); ratio/=2.0
+    while ratio<0.5:
+        filters.append('atempo=0.5'); ratio/=0.5
+    filters.append(f'atempo={ratio:.6f}')
+    cmd=[ffmpeg(),'-y','-i',input_audio,'-af',','.join(filters),'-ac','2','-ar','48000',output_audio]
+    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if r.returncode!=0:
+        raise RuntimeError(r.stderr.decode('utf-8',errors='ignore')[-3000:])
+    return output_audio
+
+def make_dubbing_audio(groups, voice, temp_dir, total_duration):
+    # Generate one natural neural voice per subtitle segment, then fit each segment
+    # to its original timing so speech starts/stops with the speaker's timing.
+    segment_paths=[]
+    for i,item in enumerate(groups):
+        raw=os.path.join(temp_dir,f'dub_raw_{i:04d}.mp3')
+        fitted=os.path.join(temp_dir,f'dub_fit_{i:04d}.wav')
+        edge_tts_voice(item['text'], raw, voice)
+        fit_audio_to_duration(raw, fitted, max(0.25,item['end']-item['start']))
+        segment_paths.append((item['start'], fitted))
+    silent=os.path.join(temp_dir,'dub_silent.wav')
+    cmd=[ffmpeg(),'-y','-f','lavfi','-i',f'anullsrc=r=48000:cl=stereo', '-t',str(max(total_duration,0.1)), '-c:a','pcm_s16le',silent]
+    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if r.returncode!=0: raise RuntimeError('បង្កើត timeline សំឡេងមិនបាន')
+    inputs=['-i',silent]
+    for _,path in segment_paths: inputs += ['-i',path]
+    filters=[]
+    labels=[]
+    for idx,(start,_) in enumerate(segment_paths, start=1):
+        label=f'a{idx}'
+        filters.append(f'[{idx}:a]adelay={int(start*1000)}:all=1[{label}]')
+        labels.append(f'[{label}]')
+    filters.append(''.join(labels)+f'amix=inputs={len(labels)}:duration=longest:normalize=0[dub]')
+    out=os.path.join(temp_dir,'dubbing.wav')
+    cmd=[ffmpeg(),'-y']+inputs+['-filter_complex',';'.join(filters),'-map','[dub]','-t',str(total_duration),'-c:a','pcm_s16le',out]
+    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if r.returncode!=0: raise RuntimeError(r.stderr.decode('utf-8',errors='ignore')[-4000:])
+    return out
+
+def replace_video_audio(video_path, dubbing_audio, output_path):
+    cmd=[ffmpeg(),'-y','-i',video_path,'-i',dubbing_audio,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output_path]
+    r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if r.returncode!=0: raise RuntimeError('ប្ដូរសំឡេង Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
+    return output_path
 MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\s\"'<>]*)?", re.I)
 
 def find_media_urls(html):
@@ -444,60 +522,6 @@ with st.expander('🎙️ Text → Free Voice'):
                 st.download_button('📥 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
             except Exception as e:
                 st.error(f'❌ Voice Error: {e}')
-
-def make_dubbing(video_path, audio_path, output_path, client, source_language, target_language):
-    extract_audio(video_path, audio_path)
-    transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
-    words = words_from(transcription)
-    if not words:
-        raise RuntimeError('រកមិនឃើញសំឡេងសម្រាប់ Dubbing')
-    groups = make_groups(words, max_words=18, max_seconds=8.0)
-    translated = translate_groups(client, groups, target_language)
-    full_text = ' '.join(item['text'] for item in translated).strip()
-    if not full_text:
-        raise RuntimeError('មិនមានអត្ថបទសម្រាប់ Dubbing')
-    voice_path = os.path.join(os.path.dirname(output_path), 'dubbing_voice.mp3')
-    free_tts(full_text, voice_path, {'Khmer':'km','Chinese':'zh-CN','English':'en'}[target_language])
-    command = [ffmpeg(), '-y', '-i', video_path, '-i', voice_path,
-               '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac',
-               '-b:a', '192k', '-shortest', '-movflags', '+faststart', output_path]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        error = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError('FFmpeg បញ្ចូល Dubbing មិនបាន:\n\n' + error[-4000:])
-    return output_path, translated
-
-with st.expander('🎙️ Dubbing'):
-    st.caption('បកប្រែសំឡេងក្នុងវីដេអូ ហើយបង្កើតសំឡេងថ្មីជំនួសសំឡេងដើម')
-    dubbing_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dubbing_source')
-    dubbing_target = st.selectbox('ភាសាសំឡេង Dubbing', ['Khmer', 'Chinese', 'English'], key='dubbing_target')
-    dubbing_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4', 'mov', 'mkv', 'webm', 'avi'], key='dubbing_video')
-    if dubbing_video:
-        st.video(dubbing_video)
-    if st.button('🎙️ បង្កើត Dubbing', type='primary', use_container_width=True, key='dubbing_button'):
-        if not get_api_key():
-            st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-            st.stop()
-        if not dubbing_video:
-            st.warning('សូម Upload Video ជាមុន')
-            st.stop()
-        client = get_gemini_client(get_api_key())
-        temp_dir = tempfile.mkdtemp()
-        input_video = os.path.join(temp_dir, 'dubbing_input.mp4')
-        audio_path = os.path.join(temp_dir, 'dubbing_audio.wav')
-        output_video = os.path.join(temp_dir, 'Smey_Dubbing.mp4')
-        try:
-            with open(input_video, 'wb') as f:
-                f.write(dubbing_video.getbuffer())
-            with st.spinner('🎙️ កំពុងបង្កើត Dubbing...'):
-                output_video, translated = make_dubbing(input_video, audio_path, output_video, client, dubbing_source, dubbing_target)
-            st.success('✅ Dubbing រួចរាល់!')
-            st.video(output_video)
-            with open(output_video, 'rb') as f:
-                st.download_button('📥 Download Dubbing MP4', f, file_name='Smey_Dubbing.mp4', mime='video/mp4', key='download_dubbing')
-        except Exception as e:
-            st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
-
 with st.expander('📱 APK'):
     try:
         apk_name, apk_data = apk_download()
@@ -527,6 +551,58 @@ with st.expander('📱 APK'):
                     st.success(f'✅ Upload រួចរាល់: {name}')
                     st.rerun()
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
+
+st.divider()
+with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
+    st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
+    dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
+    dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
+    voice_options = {
+        'Khmer': {'ប្រុស — Piseth': 'km-KH-PisethNeural', 'ស្រី — Sreymom': 'km-KH-SreymomNeural'},
+        'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
+        'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
+    }
+    voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
+    dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
+    if dub_video:
+        st.video(dub_video)
+    if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
+        if not api_key:
+            st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
+            st.stop()
+        if not dub_video:
+            st.warning('សូម Upload Video ជាមុន')
+            st.stop()
+        client=get_gemini_client(api_key)
+        temp_dir=tempfile.mkdtemp()
+        input_video=os.path.join(temp_dir,'dub_input.mp4')
+        audio_path=os.path.join(temp_dir,'dub_source.wav')
+        output_video=os.path.join(temp_dir,'Smey_AI_Dubbing.mp4')
+        try:
+            with open(input_video,'wb') as f: f.write(dub_video.getbuffer())
+            with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
+                st.write('🎧 1/4 កំពុងយកសំឡេង និង Word Timing...')
+                extract_audio(input_video,audio_path)
+                transcription=transcribe(client,audio_path,dub_source if dub_source!='Auto' else None)
+                words=words_from(transcription)
+                if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
+                groups=make_groups(words)
+                st.write('🔄 2/4 កំពុងបកប្រែប្រយោគ...')
+                translated=translate_groups(client,groups,dub_target)
+                st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
+                total=max((x['end'] for x in groups), default=audio_duration(audio_path))
+                voice=voice_options[dub_target][voice_label]
+                dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
+                st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
+                replace_video_audio(input_video,dub_audio,output_video)
+                status.update(label='✅ Dubbing រួចរាល់!',state='complete')
+            st.subheader('🎬 Result Dubbing')
+            st.video(output_video)
+            with open(output_video,'rb') as f:
+                st.download_button('📥 Download Dubbing MP4',f,file_name='Smey_AI_Dubbing.mp4',mime='video/mp4',key='download_dubbing')
+            st.info('ℹ️ សំឡេងត្រូវបាន Sync តាម timing របស់ការនិយាយ។ ការកែចលនាមាត់ពិតៗ (lip-sync) ត្រូវការ AI model បន្ថែម និងមិនទាន់បញ្ចូលក្នុង version នេះ។')
+        except Exception as e:
+            st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
 st.divider()
 st.subheader('🎬 Auto Caption')
