@@ -17,7 +17,7 @@ from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭')
 st.title('🇰🇭 Smey AI Dubbing')
-st.caption('🎙️ Khmer AI Natural Voice → Dubbing → Sync Timing')
+st.caption('🎙️ Khmer Neural Natural Voice → Dubbing → Sync Timing')
 st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
@@ -309,7 +309,7 @@ def translate_groups(client, groups, target_language):
                 last_error = exc
         if values is None:
             st.warning(f'⚠️ Gemini Translation មិនទាន់បានសម្រេចសម្រាប់ផ្នែក {start+1}–{start+len(batch)}។')
-            values = lines
+            raise RuntimeError(f'Gemini Translation failed for lines {start+1}-{start+len(batch)}: {last_error}')
         for index, item in enumerate(batch):
             translated.append({'text': values[index], 'start': item['start'], 'end': item['end']})
     return translated
@@ -376,42 +376,10 @@ def free_tts(text, output_mp3, language='km'):
     tts.save(output_mp3)
     return output_mp3
 
-@st.cache_resource
-def get_khmer_vits():
-    from transformers import VitsModel, AutoTokenizer
-    import torch
-    model_id = 'KrorngAI/mms-tts-khm-finetuned'
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = VitsModel.from_pretrained(model_id)
-    model.eval()
-    return tokenizer, model, torch
-
-def khmer_vits_voice(text, output_wav):
+def edge_tts_voice(text, output_mp3, voice, rate='+0%', pitch='+0Hz'):
     text = text.strip()
     if not text:
         raise ValueError('សូមបញ្ចូលអត្ថបទ')
-    try:
-        import scipy.io.wavfile as wavfile
-        tokenizer, model, torch = get_khmer_vits()
-        inputs = tokenizer(text, return_tensors='pt')
-        with torch.no_grad():
-            waveform = model(**inputs).waveform.squeeze().cpu().numpy()
-        wavfile.write(output_wav, model.config.sampling_rate, waveform)
-        if os.path.isfile(output_wav) and os.path.getsize(output_wav) > 1000:
-            return output_wav
-        raise RuntimeError('Khmer AI Voice មិនបានបង្កើតសំឡេង')
-    except Exception as e:
-        # fallback ជា gTTS ដើម្បីកុំឱ្យ Dubbing បរាជ័យទាំងស្រុង
-        fallback = output_wav.rsplit('.', 1)[0] + '.mp3'
-        gTTS(text=text, lang='km', slow=False).save(fallback)
-        return fallback
-
-def edge_tts_voice(text, output_mp3, voice):
-    text = text.strip()
-    if not text:
-        raise ValueError('សូមបញ្ចូលអត្ថបទ')
-    if voice == 'khmer-vits':
-        return khmer_vits_voice(text, output_mp3.rsplit('.', 1)[0] + '.wav')
     try:
         import edge_tts
     except ImportError:
@@ -421,31 +389,29 @@ def edge_tts_voice(text, output_mp3, voice):
         last = None
         for _ in range(3):
             try:
-                communicate = edge_tts.Communicate(text, voice, rate='+0%', pitch='+0Hz', volume='+0%')
+                communicate = edge_tts.Communicate(
+                    text, voice, rate=rate, pitch=pitch, volume='+0%'
+                )
                 await communicate.save(output_mp3)
                 if os.path.isfile(output_mp3) and os.path.getsize(output_mp3) > 1000:
                     return
             except Exception as e:
                 last = e
                 await asyncio.sleep(1)
-        raise RuntimeError(f'Edge Neural Voice មិនបានផ្ញើសំឡេង: {last}')
+        raise RuntimeError(f'Khmer Neural Voice មិនបានបង្កើតសំឡេង: {last}')
 
-    try:
-        asyncio.run(run())
-        return output_mp3
-    except Exception as edge_error:
-        # Fallback ដើម្បីកុំឱ្យ Dubbing បរាជ័យទាំងស្រុង ប្រសិនបើ Edge TTS ត្រូវបាន block/503។
-        fallback = {'zh-CN-YunxiNeural':'zh-CN', 'zh-CN-XiaoxiaoNeural':'zh-CN',
-                    'en-US-GuyNeural':'en', 'en-US-JennyNeural':'en'}
-        lang = fallback.get(voice)
-        if lang:
-            try:
-                gTTS(text=text, lang=lang, slow=False).save(output_mp3)
-                if os.path.isfile(output_mp3) and os.path.getsize(output_mp3) > 1000:
-                    return output_mp3
-            except Exception:
-                pass
-        raise RuntimeError(f'Neural Voice មិនអាចបង្កើតសំឡេងបាន: {edge_error}')
+    asyncio.run(run())
+    return output_mp3
+
+def natural_rate_for_duration(text, target_seconds):
+    # ប៉ាន់ស្មានល្បឿនធម្មជាតិ ហើយកែតែបន្តិច ដើម្បីកុំឱ្យសំឡេងខូចពី atempo ខ្លាំងពេក។
+    chars = max(1, len(re.sub(r'\s+', '', text)))
+    natural_seconds = max(0.8, chars / 7.0)
+    ratio = natural_seconds / max(0.25, target_seconds)
+    percent = int(round((ratio - 1.0) * 100))
+    percent = max(-35, min(45, percent))
+    return f'{percent:+d}%'
+
 
 def audio_duration(path):
     command=[ffmpeg(), '-i', path, '-f', 'null', '-']
@@ -482,7 +448,12 @@ def make_dubbing_audio(groups, voice, temp_dir, total_duration):
     for i,item in enumerate(groups):
         raw=os.path.join(temp_dir,f'dub_raw_{i:04d}.mp3')
         fitted=os.path.join(temp_dir,f'dub_fit_{i:04d}.wav')
-        generated = edge_tts_voice(item['text'], raw, voice)
+        target_len = max(0.25, item['end'] - item['start'])
+        if voice.startswith('km-KH-'):
+            rate = natural_rate_for_duration(item['text'], target_len)
+            generated = edge_tts_voice(item['text'], raw, voice, rate=rate, pitch='+0Hz')
+        else:
+            generated = edge_tts_voice(item['text'], raw, voice)
         # Khmer AI Voice អាចបង្កើតជា WAV ខណៈ fallback អាចជា MP3; ប្រើ path ដែលបាន return ពិតៗ
         source_audio = generated if generated and os.path.isfile(generated) else raw
         if not os.path.isfile(source_audio):
@@ -610,11 +581,11 @@ def webpage_download(page_url, output_path):
 st.divider()
 api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
-    st.caption('ប្រើ Neural Voice ខ្មែរ និងកែរយៈពេលសំឡេងតាមពេលនិយាយដើម។')
+    st.caption('ប្រើ Khmer Neural Voice ធម្មជាតិ និងកែល្បឿនតែបន្តិច ដើម្បីរក្សាអារម្មណ៍ដូចមនុស្ស។')
     dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
     dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
     voice_options = {
-        'Khmer': {'🇰🇭 Khmer AI — Natural': 'khmer-vits'},
+        'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
         'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
         'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
     }
@@ -657,7 +628,7 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
             with open(output_video,'rb') as f:
                 dubbing_data = f.read()
             st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
-            st.info('ℹ️ សំឡេងត្រូវបាន Sync តាម timing របស់ការនិយាយ។ ការកែចលនាមាត់ពិតៗ (lip-sync) ត្រូវការ AI model បន្ថែម និងមិនទាន់បញ្ចូលក្នុង version នេះ។')
+            st.info('ℹ️ ប្រើ Khmer Neural Voice + កែល្បឿនតាម timing។ វាជា AI voice ដែលមានសំឡេងធម្មជាតិ មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។ Lip-sync មាត់ពិតៗ មិនទាន់បញ្ចូល។')
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
