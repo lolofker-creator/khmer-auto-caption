@@ -9,6 +9,7 @@ import time
 import wave
 import json
 import asyncio
+import uuid
 from gtts import gTTS
 import asyncio
 import streamlit as st
@@ -61,6 +62,107 @@ def supabase(method, path, data=None, ctype=None, timeout=180):
     except urllib.error.HTTPError as e:
         msg = e.read().decode('utf-8', errors='ignore')
         raise RuntimeError(f'Supabase HTTP {e.code}: {msg or e.reason}') from e
+
+# =========================
+# 👥 User Tracking
+# =========================
+USER_BUCKET = 'user_tracking'
+
+def ensure_user_bucket():
+    settings = json.dumps({
+        'id': USER_BUCKET,
+        'name': USER_BUCKET,
+        'public': False
+    }).encode()
+    try:
+        supabase('POST', '/storage/v1/bucket', settings, 'application/json', timeout=30)
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if '409' not in msg and 'already exists' not in msg and 'duplicate' not in msg:
+            raise
+
+def user_session_id():
+    if 'user_session_id' not in st.session_state:
+        st.session_state.user_session_id = uuid.uuid4().hex
+    return st.session_state.user_session_id
+
+def track_user(name):
+    name = (name or '').strip()[:80]
+    if not name:
+        return
+    try:
+        ensure_user_bucket()
+        sid = user_session_id()
+        now = time.time()
+        record = {
+            'session_id': sid,
+            'name': name,
+            'last_seen': now
+        }
+        data = json.dumps(record, ensure_ascii=False).encode('utf-8')
+        base = secret('SUPABASE_URL').rstrip('/')
+        key = secret('SUPABASE_SERVICE_KEY')
+        object_name = urllib.parse.quote(f'sessions/{sid}.json', safe='/')
+        req = urllib.request.Request(
+            base + f'/storage/v1/object/{USER_BUCKET}/{object_name}',
+            data=data,
+            headers={
+                'apikey': key,
+                'Authorization': f'Bearer {key}',
+                'Content-Type': 'application/json',
+                'x-upsert': 'true'
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+    except Exception:
+        pass
+
+def get_tracked_users():
+    ensure_user_bucket()
+    body = json.dumps({
+        'prefix': 'sessions/',
+        'limit': 1000,
+        'offset': 0,
+        'sortBy': {'column': 'name', 'order': 'asc'}
+    }).encode()
+    raw = supabase('POST', f'/storage/v1/object/list/{USER_BUCKET}', body, 'application/json', timeout=30)
+    users = []
+    for item in json.loads(raw or b'[]'):
+        name = item.get('name', '')
+        if not name.endswith('.json'):
+            continue
+        try:
+            object_path = name if name.startswith('sessions/') else f'sessions/{name}'
+            object_path = urllib.parse.quote(object_path, safe='/')
+            data = supabase('GET', f'/storage/v1/object/{USER_BUCKET}/{object_path}', timeout=15)
+            users.append(json.loads(data or b'{}'))
+        except Exception:
+            pass
+    return users
+
+
+# 👤 User name for activity tracking
+if 'tracking_name' not in st.session_state:
+    st.session_state.tracking_name = ''
+with st.expander('👤 អ្នកកំពុងប្រើកម្មវិធី', expanded=not bool(st.session_state.tracking_name)):
+    tracking_name = st.text_input(
+        'ឈ្មោះរបស់អ្នក',
+        value=st.session_state.tracking_name,
+        placeholder='ឧ. Smey',
+        key='tracking_name_input'
+    )
+    if st.button('✅ ចូលប្រើ', key='tracking_login'):
+        if tracking_name.strip():
+            st.session_state.tracking_name = tracking_name.strip()[:80]
+            st.rerun()
+        else:
+            st.warning('សូមបញ្ចូលឈ្មោះជាមុន')
+
+if st.session_state.tracking_name:
+    track_user(st.session_state.tracking_name)
+    st.caption(f'🟢 កំពុងប្រើជា: **{st.session_state.tracking_name}**')
 
 def apk_list():
     body = json.dumps({'prefix':'','limit':100,'offset':0,'sortBy':{'column':'name','order':'asc'}}).encode()
@@ -526,7 +628,8 @@ with st.expander('⬇️ Download Video'):
                 st.success('✅ រួចរាល់')
                 st.video(output.name)
                 with open(output.name, 'rb') as f:
-                    st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
+                    video_data = f.read()
+                st.download_button('📥 ទាញយកវីដេអូ', video_data, file_name='download.mp4', mime='video/mp4', on_click='ignore')
             except Exception:
                 st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
 
@@ -562,6 +665,30 @@ with st.expander('📱 APK'):
 
     with st.expander('👑 Admin'):
         password=st.text_input('🔐 Password',type='password',key='apk_password')
+
+        if password == secret('APK_ADMIN_PASSWORD') and password:
+            st.subheader('👥 អ្នកកំពុងប្រើ')
+            try:
+                users = get_tracked_users()
+                now = time.time()
+                rows = []
+                for user in sorted(users, key=lambda x: x.get('last_seen', 0), reverse=True):
+                    last = float(user.get('last_seen', 0) or 0)
+                    active = (now - last) <= 300
+                    last_text = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last)) if last else '—'
+                    rows.append({
+                        '👤 ឈ្មោះ': user.get('name', 'មិនស្គាល់'),
+                        '🟢 ស្ថានភាព': '🟢 កំពុងប្រើ' if active else '⚪ មិន Active',
+                        '🕐 ប្រើចុងក្រោយ': last_text
+                    })
+                active_count = sum(1 for row in rows if row['🟢 ស្ថានភាព'] == '🟢 កំពុងប្រើ')
+                st.write(f'🟢 កំពុងប្រើ: **{active_count}** នាក់  |  👥 សរុប: **{len(rows)}** sessions')
+                if rows:
+                    st.dataframe(rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info('មិនទាន់មានអ្នកប្រើ')
+            except Exception as e:
+                st.warning(f'⚠️ User Tracking: {e}')
         uploaded=st.file_uploader('📤 Upload APK',type=['apk'],key='apk_file')
         custom=st.text_input('✏️ ឈ្មោះ APK',placeholder='ឧ. Smey AI VIP 1',key='apk_name_input')
         if st.button('⬆️ Upload APK',use_container_width=True,key='apk_upload_button'):
@@ -627,7 +754,8 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
             st.subheader('🎬 Result Dubbing')
             st.video(output_video)
             with open(output_video,'rb') as f:
-                st.download_button('📥 Download Dubbing MP4',f,file_name='Smey_AI_Dubbing.mp4',mime='video/mp4',key='download_dubbing')
+                dubbing_data = f.read()
+            st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
             st.info('ℹ️ សំឡេងត្រូវបាន Sync តាម timing របស់ការនិយាយ។ ការកែចលនាមាត់ពិតៗ (lip-sync) ត្រូវការ AI model បន្ថែម និងមិនទាន់បញ្ចូលក្នុង version នេះ។')
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
@@ -682,6 +810,7 @@ if st.button('🚀 Auto Caption', type='primary'):
         st.subheader('🎬 Result')
         st.video(output_video)
         with open(output_video, 'rb') as f:
-            st.download_button('📥 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
+            caption_data = f.read()
+        st.download_button('📥 Download MP4', caption_data, file_name='Smey_Auto_Caption.mp4', mime='video/mp4', on_click='ignore')
     except Exception as e:
         st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
