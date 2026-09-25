@@ -446,12 +446,24 @@ def replace_video_audio(video_path, dubbing_audio, output_path):
     r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     if r.returncode!=0: raise RuntimeError('ប្ដូរសំឡេង Dubbing មិនបាន:\n'+r.stderr.decode('utf-8',errors='ignore')[-5000:])
     return output_path
-MEDIA_RE = re.compile(r"https?://[^\s\"'<>]+?(?:\.mp4|\.m3u8|\.webm|\.mov|\.mkv)(?:\?[^\s\"'<>]*)?", re.I)
+MEDIA_EXTENSIONS = ('mp4','m3u8','webm','mov','mkv','avi','flv','m4v','ts','3gp','ogv')
+MEDIA_RE = re.compile(
+    r"https?://[^\s\"'<>]+?(?:\.(?:" + '|'.join(MEDIA_EXTENSIONS) + r"))(?:\?[^\s\"'<>]*)?",
+    re.I
+)
 
 def find_media_urls(html):
     return list(dict.fromkeys(MEDIA_RE.findall(html)))
 
-def download_media_url(url, output_path):
+def media_extension(url, default='.mp4'):
+    path = urllib.parse.urlparse(url).path
+    ext = os.path.splitext(path)[1].lower()
+    allowed = {'.' + x for x in MEDIA_EXTENSIONS if x != 'm3u8'}
+    return ext if ext in allowed else default
+
+def download_media_url(url, output_base):
+    ext = media_extension(url)
+    output_path = output_base + ext
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=60) as r, open(output_path, 'wb') as f:
         while True:
@@ -461,32 +473,33 @@ def download_media_url(url, output_path):
             f.write(chunk)
     return output_path
 
-def page_media_download(page_url, output_path):
+def page_media_download(page_url, output_base):
     req = urllib.request.Request(page_url, headers={'User-Agent': 'Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 Chrome/120 Safari/537.36'})
     with urllib.request.urlopen(req, timeout=30) as r:
         html = r.read().decode('utf-8', errors='ignore')
     for url in find_media_urls(html):
         try:
-            return download_media_url(url, output_path)
+            if re.search(r'\.m3u8(?:\?|$)', url, re.I):
+                return webpage_download(url, output_base)
+            return download_media_url(url, output_base)
         except Exception:
             pass
     raise RuntimeError('រកមិនឃើញវីដេអូក្នុង Link នេះ')
 
-def webpage_download(page_url, output_path):
-    # Direct video URL
-    if re.search(r'\.(?:mp4|m3u8|webm|mov|mkv)(?:\?|$)', page_url, re.I):
+def webpage_download(page_url, output_base):
+    # Direct files keep their original format. M3U8 is handled by yt-dlp.
+    if re.search(r'\.(?:' + '|'.join(MEDIA_EXTENSIONS) + r')(?:\?|$)', page_url, re.I) and not re.search(r'\.m3u8(?:\?|$)', page_url, re.I):
         try:
-            return download_media_url(page_url, output_path)
+            return download_media_url(page_url, output_base)
         except Exception:
             pass
 
-    # Supported sites
+    # Do not force MP4. yt-dlp keeps the selected/source container when possible.
     try:
         import yt_dlp
         options = {
-            'outtmpl': output_path,
+            'outtmpl': output_base + '.%(ext)s',
             'format': 'bv*+ba/b',
-            'merge_output_format': 'mp4',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
@@ -497,20 +510,17 @@ def webpage_download(page_url, output_path):
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([page_url])
-        if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
-            return output_path
-        base = os.path.splitext(output_path)[0]
-        for ext in ('.mp4', '.webm', '.mkv'):
-            candidate = base + ext
+        candidates = []
+        for ext in MEDIA_EXTENSIONS:
+            candidate = output_base + '.' + ext
             if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                if candidate != output_path:
-                    os.replace(candidate, output_path)
-                return output_path
+                candidates.append(candidate)
+        if candidates:
+            return max(candidates, key=os.path.getsize)
     except Exception:
         pass
 
-    # Public pages containing a media URL
-    return page_media_download(page_url, output_path)
+    return page_media_download(page_url, output_base)
 
 with st.expander('⬇️ Download Video'):
     page_url = st.text_input('ដាក់ Link វីដេអូ ឬ Page', placeholder='https://...')
@@ -520,13 +530,18 @@ with st.expander('⬇️ Download Video'):
         else:
             try:
                 with st.spinner('កំពុង Download...'):
-                    output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                    output.close()
-                    webpage_download(page_url.strip(), output.name)
-                st.success('✅ រួចរាល់')
-                st.video(output.name)
-                with open(output.name, 'rb') as f:
-                    st.download_button('📥 ទាញយកវីដេអូ', f, file_name='download.mp4', mime='video/mp4')
+                    temp_dir = tempfile.mkdtemp()
+                    output_base = os.path.join(temp_dir, 'download')
+                    output_path = webpage_download(page_url.strip(), output_base)
+                file_name = os.path.basename(output_path)
+                import mimetypes
+                mime = mimetypes.guess_type(output_path)[0] or 'application/octet-stream'
+                st.success(f'✅ រួចរាល់: {file_name}')
+                if os.path.splitext(output_path)[1].lower() in ('.mp4', '.webm', '.ogv'):
+                    st.video(output_path)
+                with open(output_path, 'rb') as f:
+                    download_data = f.read()
+                st.download_button('📥 ទាញយកវីដេអូ', download_data, file_name=file_name, mime=mime, on_click='ignore')
             except Exception:
                 st.error('មិនអាច Download Link នេះបានទេ។ Link អាចជា Private/Login/DRM ឬមិនមានវីដេអូដែលអាចទាញយកបាន។')
 
@@ -627,7 +642,8 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
             st.subheader('🎬 Result Dubbing')
             st.video(output_video)
             with open(output_video,'rb') as f:
-                st.download_button('📥 Download Dubbing MP4',f,file_name='Smey_AI_Dubbing.mp4',mime='video/mp4',key='download_dubbing')
+                dubbing_data = f.read()
+            st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
             st.info('ℹ️ សំឡេងត្រូវបាន Sync តាម timing របស់ការនិយាយ។ ការកែចលនាមាត់ពិតៗ (lip-sync) ត្រូវការ AI model បន្ថែម និងមិនទាន់បញ្ចូលក្នុង version នេះ។')
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
@@ -682,6 +698,7 @@ if st.button('🚀 Auto Caption', type='primary'):
         st.subheader('🎬 Result')
         st.video(output_video)
         with open(output_video, 'rb') as f:
-            st.download_button('📥 Download MP4', f, file_name='Smey_Auto_Caption.mp4', mime='video/mp4')
+            caption_data = f.read()
+        st.download_button('📥 Download MP4', caption_data, file_name='Smey_Auto_Caption.mp4', mime='video/mp4', on_click='ignore')
     except Exception as e:
         st.error(f'❌ Auto Caption មិនអាចបញ្ចប់បាន: {e}')
