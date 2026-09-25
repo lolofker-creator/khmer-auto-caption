@@ -60,82 +60,46 @@ def supabase(method, path, data=None, ctype=None, timeout=180):
         msg = e.read().decode('utf-8', errors='ignore')
         raise RuntimeError(f'Supabase HTTP {e.code}: {msg or e.reason}') from e
 
+def apk_list():
+    body = json.dumps({'prefix':'','limit':100,'offset':0,'sortBy':{'column':'name','order':'asc'}}).encode()
+    raw = supabase('POST', '/storage/v1/object/list/apk', body, 'application/json')
+    return [x['name'] for x in json.loads(raw or b'[]') if x.get('name','').lower().endswith('.apk')]
+
 def apk_upload(name, data):
     if len(data) > 50 * 1024 * 1024:
         raise RuntimeError('APK ធំពេក។ អតិបរមា 50MB')
     key = secret('SUPABASE_SERVICE_KEY')
     base = secret('SUPABASE_URL').rstrip('/')
-    settings = json.dumps({'id':'apk','name':'apk','public':False,'file_size_limit':50*1024*1024,'allowed_mime_types':['application/vnd.android.package-archive','text/plain']}).encode()
+    # Create/update private bucket
+    settings = json.dumps({'id':'apk','name':'apk','public':False,'file_size_limit':50*1024*1024,'allowed_mime_types':['application/vnd.android.package-archive']}).encode()
     try:
         supabase('POST','/storage/v1/bucket',settings,'application/json')
     except RuntimeError as e:
         if '409' in str(e) or 'already exists' in str(e).lower() or 'duplicate' in str(e).lower():
             try: supabase('PUT','/storage/v1/bucket/apk',settings,'application/json')
             except Exception: pass
-        else:
-            raise
-
-    # Supabase Storage object keys do not accept the Khmer display name here.
-    # Keep the real filename separately, while storing the APK under an ASCII key.
-    req = urllib.request.Request(base + '/storage/v1/object/apk/current.apk', data=data, headers={
-        'apikey':key,'Authorization':f'Bearer {key}',
-        'Content-Type':'application/vnd.android.package-archive','x-upsert':'true'
+        else: raise
+    old = apk_list()
+    path = urllib.parse.quote(name, safe='')
+    req = urllib.request.Request(base + f'/storage/v1/object/apk/{path}', data=data, headers={
+        'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/vnd.android.package-archive','x-upsert':'true'
     }, method='POST')
     try:
         with urllib.request.urlopen(req, timeout=180): pass
     except urllib.error.HTTPError as e:
         msg=e.read().decode('utf-8',errors='ignore')
         raise RuntimeError(f'Supabase Upload HTTP {e.code}: {msg or e.reason}') from e
-
-    # Save the user-facing APK name in a small UTF-8 text object.
-    name_req = urllib.request.Request(base + '/storage/v1/object/apk/current_name.txt', data=name.encode('utf-8'), headers={
-        'apikey':key,'Authorization':f'Bearer {key}',
-        'Content-Type':'text/plain; charset=utf-8','x-upsert':'true'
-    }, method='POST')
-    try:
-        with urllib.request.urlopen(name_req, timeout=30): pass
-    except urllib.error.HTTPError as e:
-        msg=e.read().decode('utf-8',errors='ignore')
-        raise RuntimeError(f'Supabase Name HTTP {e.code}: {msg or e.reason}') from e
-
-
-def apk_rename(name):
-    name = re.sub(r'[\\/:*?"<>|]', '', name.strip()).strip()
-    if not name:
-        raise RuntimeError('សូមបញ្ចូលឈ្មោះ APK')
-    if not name.lower().endswith('.apk'):
-        name += '.apk'
-    key = secret('SUPABASE_SERVICE_KEY')
-    base = secret('SUPABASE_URL').rstrip('/')
-    if not key or not base:
-        raise RuntimeError('សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY ក្នុង Secrets')
-    req = urllib.request.Request(base + '/storage/v1/object/apk/current_name.txt', data=name.encode('utf-8'), headers={
-        'apikey':key,'Authorization':f'Bearer {key}',
-        'Content-Type':'text/plain; charset=utf-8','x-upsert':'true'
-    }, method='POST')
-    try:
-        with urllib.request.urlopen(req, timeout=30):
-            pass
-    except urllib.error.HTTPError as e:
-        msg=e.read().decode('utf-8',errors='ignore')
-        raise RuntimeError(f'Supabase Name HTTP {e.code}: {msg or e.reason}') from e
-    return name
+    for old_name in old:
+        if old_name != name:
+            body=json.dumps({'prefixes':[old_name]}).encode()
+            supabase('DELETE','/storage/v1/object/apk',body,'application/json')
 
 def apk_download():
-    key = secret('SUPABASE_SERVICE_KEY')
-    base = secret('SUPABASE_URL').rstrip('/')
-    if not key or not base:
-        raise RuntimeError('សូមកំណត់ SUPABASE_URL និង SUPABASE_SERVICE_KEY ក្នុង Secrets')
-    try:
-        raw_name = supabase('GET','/storage/v1/object/apk/current_name.txt',timeout=30)
-        name = raw_name.decode('utf-8').strip() or 'app.apk'
-    except Exception:
-        name = 'app.apk'
-    try:
-        data = supabase('GET','/storage/v1/object/apk/current.apk',timeout=180)
-    except Exception:
-        return None, None
-    return name, data
+    names=apk_list()
+    if not names: return None,None
+    name=names[0]
+    path=urllib.parse.quote(name,safe='')
+    return name, supabase('GET',f'/storage/v1/object/apk/{path}',timeout=180)
 
 def ass_time(value):
     value = max(0.0, float(value))
@@ -480,6 +444,60 @@ with st.expander('🎙️ Text → Free Voice'):
                 st.download_button('📥 Download Voice', audio_data, file_name='smey_voice.mp3', mime='audio/mpeg', key='download_free_voice')
             except Exception as e:
                 st.error(f'❌ Voice Error: {e}')
+
+def make_dubbing(video_path, audio_path, output_path, client, source_language, target_language):
+    extract_audio(video_path, audio_path)
+    transcription = transcribe(client, audio_path, source_language if source_language != 'Auto' else None)
+    words = words_from(transcription)
+    if not words:
+        raise RuntimeError('រកមិនឃើញសំឡេងសម្រាប់ Dubbing')
+    groups = make_groups(words, max_words=18, max_seconds=8.0)
+    translated = translate_groups(client, groups, target_language)
+    full_text = ' '.join(item['text'] for item in translated).strip()
+    if not full_text:
+        raise RuntimeError('មិនមានអត្ថបទសម្រាប់ Dubbing')
+    voice_path = os.path.join(os.path.dirname(output_path), 'dubbing_voice.mp3')
+    free_tts(full_text, voice_path, {'Khmer':'km','Chinese':'zh-CN','English':'en'}[target_language])
+    command = [ffmpeg(), '-y', '-i', video_path, '-i', voice_path,
+               '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac',
+               '-b:a', '192k', '-shortest', '-movflags', '+faststart', output_path]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        error = result.stderr.decode('utf-8', errors='ignore')
+        raise RuntimeError('FFmpeg បញ្ចូល Dubbing មិនបាន:\n\n' + error[-4000:])
+    return output_path, translated
+
+with st.expander('🎙️ Dubbing'):
+    st.caption('បកប្រែសំឡេងក្នុងវីដេអូ ហើយបង្កើតសំឡេងថ្មីជំនួសសំឡេងដើម')
+    dubbing_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dubbing_source')
+    dubbing_target = st.selectbox('ភាសាសំឡេង Dubbing', ['Khmer', 'Chinese', 'English'], key='dubbing_target')
+    dubbing_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4', 'mov', 'mkv', 'webm', 'avi'], key='dubbing_video')
+    if dubbing_video:
+        st.video(dubbing_video)
+    if st.button('🎙️ បង្កើត Dubbing', type='primary', use_container_width=True, key='dubbing_button'):
+        if not get_api_key():
+            st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
+            st.stop()
+        if not dubbing_video:
+            st.warning('សូម Upload Video ជាមុន')
+            st.stop()
+        client = get_gemini_client(get_api_key())
+        temp_dir = tempfile.mkdtemp()
+        input_video = os.path.join(temp_dir, 'dubbing_input.mp4')
+        audio_path = os.path.join(temp_dir, 'dubbing_audio.wav')
+        output_video = os.path.join(temp_dir, 'Smey_Dubbing.mp4')
+        try:
+            with open(input_video, 'wb') as f:
+                f.write(dubbing_video.getbuffer())
+            with st.spinner('🎙️ កំពុងបង្កើត Dubbing...'):
+                output_video, translated = make_dubbing(input_video, audio_path, output_video, client, dubbing_source, dubbing_target)
+            st.success('✅ Dubbing រួចរាល់!')
+            st.video(output_video)
+            with open(output_video, 'rb') as f:
+                st.download_button('📥 Download Dubbing MP4', f, file_name='Smey_Dubbing.mp4', mime='video/mp4', key='download_dubbing')
+        except Exception as e:
+            st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
+
 with st.expander('📱 APK'):
     try:
         apk_name, apk_data = apk_download()
@@ -509,20 +527,6 @@ with st.expander('📱 APK'):
                     st.success(f'✅ Upload រួចរាល់: {name}')
                     st.rerun()
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
-
-        rename=st.text_input('✏️ កែឈ្មោះ APK',placeholder='ឈ្មោះថ្មី...',key='apk_rename_input')
-        if st.button('💾 រក្សាទុកឈ្មោះថ្មី',use_container_width=True,key='apk_rename_button'):
-            admin=secret('APK_ADMIN_PASSWORD')
-            if not admin: st.error('សូមកំណត់ APK_ADMIN_PASSWORD ក្នុង Secrets')
-            elif password != admin: st.error('❌ Password មិនត្រឹមត្រូវ')
-            elif not rename.strip(): st.warning('⚠️ សូមបញ្ចូលឈ្មោះថ្មី')
-            else:
-                try:
-                    with st.spinner('កំពុងប្តូរឈ្មោះ APK...'):
-                        new_name=apk_rename(rename)
-                    st.success(f'✅ ឈ្មោះថ្មី: {new_name}')
-                    st.rerun()
-                except Exception as e: st.error(f'❌ កែឈ្មោះមិនបាន: {e}')
 
 st.divider()
 st.subheader('🎬 Auto Caption')
