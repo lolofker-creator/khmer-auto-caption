@@ -4,3 +4,4 @@ imageio-ffmpeg
 av
 yt-dlp
 gTTS
+edge-tts
