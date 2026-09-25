@@ -482,32 +482,86 @@ def resolve_page_url(url):
         return url
 
 def tikwm_download(page_url, output_path):
-    """TikTok fallback: ask TikWM to resolve the media URL, then download it."""
+    """TikTok fallback through TikWM. Try GET first, then POST."""
     host = urllib.parse.urlparse(page_url).netloc.lower()
     if 'tiktok.com' not in host:
         return None
-    # Short TikTok links can need a few seconds before the redirect is ready.
+
+    # TikWM documents both GET and POST and accepts vt.tiktok.com short links.
+    # Short links sometimes need a few seconds before the redirect is ready.
     time.sleep(3)
-    form = urllib.parse.urlencode({'url': page_url, 'hd': '1'}).encode()
-    req = urllib.request.Request(
-        'https://www.tikwm.com/api/',
-        data=form,
-        headers={
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'Accept': 'application/json,text/plain,*/*',
-        },
-        method='POST',
-    )
-    with urllib.request.urlopen(req, timeout=45) as r:
-        data = json.loads(r.read().decode('utf-8', errors='ignore'))
-    if data.get('code') != 0 or not data.get('data'):
-        raise RuntimeError('TikWM មិនអាចរកវីដេអូពី Link នេះបាន')
-    media = data['data']
-    media_url = media.get('hdplay') or media.get('play') or media.get('wmplay')
-    if not media_url:
-        raise RuntimeError('TikWM មិនបានផ្តល់ Media URL')
-    return download_media_url(media_url, output_path)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
+        'Accept': 'application/json,text/plain,*/*',
+        'Referer': 'https://www.tikwm.com/',
+    }
+    errors = []
+
+    for base in ('https://www.tikwm.com/api/', 'https://tikwm.com/api/'):
+        # Method 1: GET (TikWM's documented simple form)
+        try:
+            qs = urllib.parse.urlencode({'url': page_url, 'hd': '1'})
+            req = urllib.request.Request(base + '?' + qs, headers=headers, method='GET')
+            with urllib.request.urlopen(req, timeout=45) as r:
+                raw = r.read().decode('utf-8', errors='ignore')
+            data = json.loads(raw)
+            if data.get('code') == 0 and data.get('data'):
+                media = data['data']
+                media_urls = [
+                    media.get('hdplay'), media.get('play'), media.get('wmplay'),
+                    media.get('video'), media.get('download')
+                ]
+                for media_url in media_urls:
+                    if media_url:
+                        try:
+                            req2 = urllib.request.Request(media_url, headers={**headers, 'Referer': 'https://www.tikwm.com/'})
+                            with urllib.request.urlopen(req2, timeout=90) as r, open(output_path, 'wb') as f:
+                                while True:
+                                    chunk = r.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    f.write(chunk)
+                            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                                return output_path
+                        except Exception as e:
+                            errors.append('media GET: ' + str(e)[-500:])
+            else:
+                errors.append('GET API: ' + str(data.get('msg') or data)[:700])
+        except Exception as e:
+            errors.append('GET: ' + str(e)[-700:])
+
+        # Method 2: POST
+        try:
+            form = urllib.parse.urlencode({'url': page_url, 'hd': '1'}).encode()
+            req = urllib.request.Request(
+                base, data=form,
+                headers={**headers, 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as r:
+                data = json.loads(r.read().decode('utf-8', errors='ignore'))
+            if data.get('code') == 0 and data.get('data'):
+                media = data['data']
+                for media_url in (media.get('hdplay'), media.get('play'), media.get('wmplay'), media.get('video'), media.get('download')):
+                    if media_url:
+                        try:
+                            req2 = urllib.request.Request(media_url, headers={**headers, 'Referer': 'https://www.tikwm.com/'})
+                            with urllib.request.urlopen(req2, timeout=90) as r, open(output_path, 'wb') as f:
+                                while True:
+                                    chunk = r.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    f.write(chunk)
+                            if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                                return output_path
+                        except Exception as e:
+                            errors.append('media POST: ' + str(e)[-500:])
+            else:
+                errors.append('POST API: ' + str(data.get('msg') or data)[:700])
+        except Exception as e:
+            errors.append('POST: ' + str(e)[-700:])
+
+    raise RuntimeError('TikWM មិនអាចទាញបាន: ' + ' | '.join(errors[-3:]))
 
 def webpage_download(page_url, output_path):
     page_url = page_url.strip()
