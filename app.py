@@ -708,7 +708,7 @@ with st.expander('🌐 Website Link → Auto Dubbing'):
         if not website_url.strip():
             st.warning('សូមដាក់ Link ជាមុន')
             st.stop()
-        client = get_gemini_client(api_key)
+        client = get_gemini_client(website_api_key)
         temp_dir = tempfile.mkdtemp()
         input_video = os.path.join(temp_dir, 'website_input.mp4')
         source_audio = os.path.join(temp_dir, 'website_source.wav')
