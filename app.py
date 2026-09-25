@@ -617,6 +617,35 @@ def tdown_download(page_url, output_path):
         raise RuntimeError(str(data.get('error') or data.get('message') or 'TDown រកមិនឃើញ MP4'))
     return _download_from_url(media_url, output_path, 'https://tdownv4.sl-bjs.workers.dev/')
 
+
+
+def clipx_any_links(page_url):
+    """Resolve TikTok to whatever public media ClipX returns: video, audio, or images."""
+    api = 'https://clipx.zamdev.workers.dev/?' + urllib.parse.urlencode({
+        'url': page_url, 'quality': 'best', 'audio': 'true', 'cover': 'true',
+        'metadata': 'false', 'meta': 'false', 'cache': 'true', 'trace': 'false',
+        'processing_time': 'false', 'contact': 'false'
+    })
+    req = urllib.request.Request(api, headers={
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36',
+        'Accept': 'application/json',
+    })
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.loads(r.read().decode('utf-8', errors='ignore'))
+    if not data.get('success'):
+        raise RuntimeError(str(data.get('error') or 'ClipX មិនអាច Resolve Link បាន'))
+    d = data.get('data') or {}
+    links = []
+    v = d.get('video') or {}
+    for label, key in [('HD Video', 'hd_mp4'), ('Standard Video', 'standard_mp4'), ('Video Watermark', 'wmplay')]:
+        u = v.get(key)
+        if u: links.append((label, u, 'video'))
+    a = d.get('audio') or {}
+    if a.get('play'): links.append(('Audio', a['play'], 'audio'))
+    for i,u in enumerate(d.get('images') or [], 1):
+        if u: links.append((f'Image {i}', u, 'image'))
+    return links
+
 def resolver_browser_links(page_url):
     q = urllib.parse.quote(page_url, safe='')
     return [
@@ -721,9 +750,19 @@ with st.expander('⬇️ Download Video'):
                 st.error(f'❌ Download មិនបាន:\n{e}')
 
                 if 'tiktok.com' in page_url.lower():
-                    st.warning('⚠️ TikTok អាចបានបិទ IP របស់ Server។ សាក Resolver ខាងក្រោមបាន ដោយមិនបាច់ប្តូរ Link។')
-                    for label, link in resolver_browser_links(page_url.strip()):
-                        st.link_button(f'🌐 បើក {label} Download', link, use_container_width=True)
+                    st.warning('⚠️ Server មិនអាចយក file មកកាន់ Streamlit បាន ប៉ុន្តែអាចបង្កើត Direct Download Link បាន។')
+                    try:
+                        direct_links = clipx_any_links(page_url.strip())
+                        if direct_links:
+                            st.success('✅ រកឃើញ Media — ចុចខាងក្រោមដើម្បី Download ដោយផ្ទាល់')
+                            for label, media_url, kind in direct_links:
+                                icon = '🎬' if kind == 'video' else ('🎵' if kind == 'audio' else '🖼️')
+                                st.link_button(f'{icon} Download {label}', media_url, use_container_width=True)
+                        else:
+                            st.warning('មិនរកឃើញ Media URL ទេ។')
+                    except Exception as direct_error:
+                        st.error(f'❌ Direct Download Resolver: {direct_error}')
+                    st.caption('ℹ️ អាចជា Video / Audio / Image — មិនកំណត់តែ MP4 ទេ។')
 
 with st.expander('🎙️ Text → Free Voice'):
     tts_text = st.text_area('បញ្ចូលអត្ថបទ', height=120, key='tts_text', placeholder='សរសេរអត្ថបទដែលចង់បម្លែងជាសំឡេង...')
