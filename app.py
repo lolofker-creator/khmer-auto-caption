@@ -252,66 +252,64 @@ def transcribe(client, audio_path, source_language):
         return client.models.generate_content(model=TRANSCRIBE_MODEL, contents=[types.Part.from_bytes(data=audio_data, mime_type='audio/wav'), prompt], config=types.GenerateContentConfig(audio_transcription_config=transcription_config))
     return retry_gemini(call)
 
-def translate_groups(client, groups, target_language):
+def _google_free_translate(text, target_language, source_language='auto'):
+    """Free Google Translate web endpoint. No Gemini quota/key is used for translation."""
+    if not text.strip():
+        return text
+    target_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
+    target = target_map.get(target_language)
+    if not target:
+        return text
+    source_map = {'Chinese': 'zh-CN', 'Khmer': 'km'}
+    source = source_map.get(source_language, 'auto')
+    url = (
+        'https://translate.googleapis.com/translate_a/single?client=gtx'
+        f'&sl={urllib.parse.quote(source)}&tl={urllib.parse.quote(target)}'
+        '&dt=t&q=' + urllib.parse.quote(text)
+    )
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=20) as response:
+        data = json.loads(response.read().decode('utf-8'))
+    parts = data[0] if isinstance(data, list) and data else []
+    result = ''.join(str(part[0]) for part in parts if isinstance(part, list) and part and part[0])
+    if not result.strip():
+        raise RuntimeError('Free Translation មិនបានបញ្ជូនលទ្ធផល')
+    return result.strip()
+
+
+def _translation_is_valid(text, target_language):
+    text = text.strip()
+    if not text:
+        return False
+    if target_language == 'Khmer':
+        return bool(re.search(r'[\u1780-\u17FF]', text))
+    if target_language == 'Chinese':
+        return bool(re.search(r'[\u3400-\u9FFF]', text))
+    if target_language == 'English':
+        return bool(re.search(r'[A-Za-z]', text))
+    return True
+
+
+def translate_groups(client, groups, target_language, source_language='Auto'):
+    """Translate without Gemini, so Gemini translation quota cannot break Dubbing."""
     if not groups or target_language == 'No translation':
         return groups
     translated = []
-    batch_size = 10
-    for start in range(0, len(groups), batch_size):
-        batch = groups[start:start + batch_size]
-        lines = [item['text'].replace('\n', ' ').strip() for item in batch]
-        numbered = '\n'.join(f'{i+1}. {text}' for i, text in enumerate(lines))
-        prompt = (
-            f'Translate the following spoken-dialogue lines into natural {target_language}.\n'
-            'Return ONLY a JSON array of strings. Exactly one output string for each numbered input line, same order.\n'
-            'Do not explain anything. Do not omit lines. Preserve names, numbers and meaning.\n\n'
-            f'{numbered}'
+    failed = []
+    for index, item in enumerate(groups, start=1):
+        source_text = item['text'].replace('\n', ' ').strip()
+        try:
+            result = _google_free_translate(source_text, target_language, source_language)
+            if not _translation_is_valid(result, target_language):
+                raise RuntimeError('លទ្ធផលមិនមែនជាភាសាគោលដៅ')
+            translated.append({'text': result, 'start': item['start'], 'end': item['end']})
+        except Exception as exc:
+            failed.append((index, str(exc)))
+    if failed:
+        sample = '; '.join(f'#{i}: {err}' for i, err in failed[:3])
+        raise RuntimeError(
+            f'Free Translation failed សម្រាប់ {len(failed)}/{len(groups)} ប្រយោគ។ {sample}'
         )
-        values = None
-        last_error = None
-        for attempt in range(3):
-            try:
-                response = client.models.generate_content(
-                    model=TRANSLATE_MODEL,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.2,
-                        max_output_tokens=4096,
-                    ),
-                )
-                raw = (get_value(response, 'text', '') or '').strip()
-                raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.I).strip()
-                values = json.loads(raw)
-                if not isinstance(values, list) or len(values) != len(batch):
-                    raise ValueError('Translation response មិនត្រឹមត្រូវ')
-                values = [str(v).strip() for v in values]
-                break
-            except Exception as exc:
-                last_error = exc
-                time.sleep(0.8)
-        if values is None:
-            # Fallback: ask for one line per input without JSON/schema, then split.
-            try:
-                response = client.models.generate_content(
-                    model=TRANSLATE_MODEL,
-                    contents=(
-                        f'Translate each line below into natural {target_language}. '
-                        'Return exactly one translated line per input line, no numbering, no explanation.\n\n'
-                        + '\n'.join(lines)
-                    ),
-                    config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=4096),
-                )
-                raw_lines = [x.strip() for x in (get_value(response, 'text', '') or '').splitlines() if x.strip()]
-                raw_lines = [re.sub(r'^\s*\d+[.)]\s*', '', x).strip() for x in raw_lines]
-                if len(raw_lines) == len(batch):
-                    values = raw_lines
-            except Exception as exc:
-                last_error = exc
-        if values is None:
-            st.warning(f'⚠️ Gemini Translation មិនទាន់បានសម្រេចសម្រាប់ផ្នែក {start+1}–{start+len(batch)}។')
-            raise RuntimeError(f'Gemini Translation failed for lines {start+1}-{start+len(batch)}: {last_error}')
-        for index, item in enumerate(batch):
-            translated.append({'text': values[index], 'start': item['start'], 'end': item['end']})
     return translated
 
 ASS_HEADER = '[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,55,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
@@ -614,8 +612,8 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
                 words=words_from(transcription)
                 if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
                 groups=make_groups(words)
-                st.write('🔄 2/4 កំពុងបកប្រែប្រយោគ...')
-                translated=translate_groups(client,groups,dub_target)
+                st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
+                translated=translate_groups(client,groups,dub_target,dub_source)
                 st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
                 total=max((x['end'] for x in groups), default=audio_duration(audio_path))
                 voice=voice_options[dub_target][voice_label]
