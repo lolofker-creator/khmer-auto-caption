@@ -581,131 +581,153 @@ with st.expander('📱 APK'):
                 except Exception as e: st.error(f'❌ Upload APK មិនបាន: {e}')
 
 
-def music_safe_dubbing_audio(source_audio, dubbing_audio, output_audio, speech_groups):
-    """Create a background track with centered dialogue reduced, then mix new dubbing over it.
-    Uses Demucs when already installed; otherwise falls back to FFmpeg center-channel cancellation.
-    This is isolated to the Website Link feature only.
-    """
-    temp_dir = os.path.dirname(output_audio)
-    music_track = os.path.join(temp_dir, 'web_music_only.wav')
+
+# ============================================================
+# 🌐 NEW FEATURE ONLY: Website Link → Translate → Dubbing
+# IMPORTANT: Existing features/functions above and below are untouched.
+# ============================================================
+def website_translate_groups(client, groups, target_language):
+    """Translation helper used only by the new Website Link feature."""
+    if not groups or target_language == 'No translation':
+        return groups
+    result = []
+    batch_size = 12
+    for start in range(0, len(groups), batch_size):
+        batch = groups[start:start + batch_size]
+        numbered = '\n'.join(f'{i+1}. {item["text"]}' for i, item in enumerate(batch))
+        prompt = (
+            f'Translate the following spoken subtitle lines into {target_language}.\n'
+            'Return ONLY the translated lines, one line for each input line, in the exact same order.\n'
+            'Do not add numbering, explanations, quotes, or extra lines.\n\n'
+            f'{numbered}'
+        )
+        def call():
+            return client.models.generate_content(
+                model=TRANSLATE_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.2)
+            )
+        response = retry_gemini(call)
+        raw = (get_value(response, 'text', '') or '').strip()
+        if not raw:
+            raise RuntimeError('Website Translation មិនបានទទួលអត្ថបទពី Gemini')
+        lines = [re.sub(r'^\s*\d+[.)]\s*', '', x).strip() for x in raw.splitlines() if x.strip()]
+        if len(lines) != len(batch):
+            # Try JSON array as a second parser without changing the old translator.
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    lines = [str(x).strip() for x in parsed]
+            except Exception:
+                pass
+        if len(lines) != len(batch):
+            raise RuntimeError(f'Website Translation បានតែ {len(lines)} បន្ទាត់ ត្រូវការ {len(batch)}')
+        for item, text in zip(batch, lines):
+            result.append({'text': text, 'start': item['start'], 'end': item['end']})
+    return result
+
+
+def website_separate_voice(audio_path, out_dir):
+    """Use Demucs when installed to keep accompaniment/music and remove dialogue."""
     try:
-        # Best effort: use Demucs only if the environment already has it installed.
-        import demucs.api
-        import torch
-        model = demucs.api.Separator(model='htdemucs', device='cpu')
-        origin, separated = model.separate_audio_file(source_audio)
-        if 'vocals' in separated:
-            music = separated['no_vocals'] if 'no_vocals' in separated else None
-            if music is not None:
-                import torchaudio
-                torchaudio.save(music_track, music.cpu(), model.samplerate)
-        if not os.path.isfile(music_track):
-            raise RuntimeError('Demucs មិនបានបង្កើត Music Track')
+        import demucs  # noqa: F401
     except Exception:
-        # Fallback for normal Streamlit deployments: remove centered dialogue as much as possible.
-        cmd = [ffmpeg(), '-y', '-i', source_audio,
-               '-af', 'pan=stereo|c0=c0-c1|c1=c1-c0',
-               '-ar', '48000', '-ac', '2', music_track]
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if r.returncode != 0:
-            raise RuntimeError('មិនអាចបំបែកសំឡេងនិយាយចេញពីភ្លេងបាន')
-
-    # Lower the remaining background only while dubbed speech is present.
-    ducked = os.path.join(temp_dir, 'web_music_ducked.wav')
-    duck_filters = []
-    for item in speech_groups:
-        start = max(0.0, float(item['start']))
-        end = max(start + 0.05, float(item['end']))
-        duck_filters.append(f"volume=enable='between(t,{start:.3f},{end:.3f})':volume=0.28")
-    if duck_filters:
-        vf = ','.join(duck_filters)
-        cmd = [ffmpeg(), '-y', '-i', music_track, '-af', vf, '-ar', '48000', '-ac', '2', ducked]
-    else:
-        cmd = [ffmpeg(), '-y', '-i', music_track, '-ar', '48000', '-ac', '2', ducked]
+        raise RuntimeError(
+            'Website Dubbing ត្រូវការ Demucs សម្រាប់បំបែកសំឡេងនិយាយចេញពីភ្លេង។ '
+            'សូមបន្ថែម demucs ទៅ requirements.txt រួច Deploy ម្តងទៀត។'
+        )
+    os.makedirs(out_dir, exist_ok=True)
+    cmd = [
+        'python', '-m', 'demucs.separate',
+        '-n', 'htdemucs',
+        '--two-stems=vocals',
+        '-o', out_dir,
+        audio_path,
+    ]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode != 0:
-        raise RuntimeError(r.stderr.decode('utf-8', errors='ignore')[-3000:])
+        raise RuntimeError('Demucs បំបែកសំឡេងមិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-4000:])
+    base = os.path.splitext(os.path.basename(audio_path))[0]
+    instrumental = os.path.join(out_dir, 'htdemucs', base, 'no_vocals.wav')
+    vocals = os.path.join(out_dir, 'htdemucs', base, 'vocals.wav')
+    if not os.path.isfile(instrumental):
+        raise RuntimeError('រកមិនឃើញភ្លេងក្រោយពេលបំបែកសំឡេង')
+    return instrumental, vocals
 
-    cmd = [ffmpeg(), '-y', '-i', ducked, '-i', dubbing_audio,
-           '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=first:normalize=0[mix]',
-           '-map', '[mix]', '-ar', '48000', '-ac', '2', '-c:a', 'aac', '-b:a', '192k', output_audio]
+
+def website_mix_music_and_dub(video_path, music_path, dub_audio, output_path):
+    """Keep original accompaniment/music and mix the new dubbed voice over it."""
+    cmd = [
+        ffmpeg(), '-y',
+        '-i', video_path,
+        '-i', music_path,
+        '-i', dub_audio,
+        '-filter_complex',
+        '[1:a]volume=0.55[music];[2:a]volume=1.15[dub];'
+        '[music][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]',
+        '-map', '0:v:0', '-map', '[mix]',
+        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+        '-shortest', '-movflags', '+faststart', output_path
+    ]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode != 0:
-        raise RuntimeError('មិនអាច Mix ភ្លេង + Dubbing បាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-4000:])
-    return output_audio
+        raise RuntimeError('Mix ភ្លេង + Dubbing មិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-5000:])
+    return output_path
 
 
-def web_link_dubbing(video_url, target_language, voice, temp_dir):
-    import yt_dlp
-    source_video = os.path.join(temp_dir, 'web_source.%(ext)s')
-    options = {
-        'outtmpl': source_video,
-        'format': 'bv*+ba/b',
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-        'ffmpeg_location': ffmpeg(),
-        'retries': 5,
-        'fragment_retries': 5,
-        'socket_timeout': 30,
-    }
-    with yt_dlp.YoutubeDL(options) as ydl:
-        ydl.download([video_url])
-    candidates = [x for x in os.listdir(temp_dir) if x.startswith('web_source.') and not x.endswith('.part')]
-    if not candidates:
-        raise RuntimeError('មិនអាចយកវីដេអូពី Link នេះបានទេ')
-    source_video_path = os.path.join(temp_dir, candidates[0])
-
-    audio_path = os.path.join(temp_dir, 'web_source.wav')
-    extract_audio(source_video_path, audio_path)
-    client = get_gemini_client(get_api_key())
-    transcription = transcribe(client, audio_path, None)
-    words = words_from(transcription)
-    if not words:
-        raise RuntimeError('រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូ')
-    groups = make_groups(words)
-    translated = translate_groups(client, groups, target_language)
-    total = max((x['end'] for x in groups), default=audio_duration(audio_path))
-    dub_audio = make_dubbing_audio(translated, voice, temp_dir, total)
-    mixed_audio = os.path.join(temp_dir, 'web_final_audio.m4a')
-    music_safe_dubbing_audio(audio_path, dub_audio, mixed_audio, translated)
-    output_video = os.path.join(temp_dir, 'Smey_Web_Dubbing.mp4')
-    cmd = [ffmpeg(), '-y', '-i', source_video_path, '-i', mixed_audio,
-           '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac',
-           '-b:a', '192k', '-shortest', '-movflags', '+faststart', output_video]
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if r.returncode != 0:
-        raise RuntimeError('បង្កើតវីដេអូ Website Dubbing មិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-4000:])
-    return output_video
-
-with st.expander('🌐 Website Link → Auto Dubbing (ថ្មី)'):
-    st.caption('ដាក់ Link តែប៉ុណ្ណោះ — មិនបាច់ Download → Upload វិញទេ។')
-    web_url = st.text_input('🔗 Website Video Link', placeholder='https://... ', key='web_link_dub_url')
-    web_target = st.selectbox('🌐 ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='web_link_dub_target')
-    web_voices = {
+with st.expander('🌐 Website Link → Auto Dubbing'):
+    st.caption('ដាក់ Link ពី Website → Server ដំណើរការបណ្ដោះអាសន្ន → បកប្រែ → Dubbing។ មិនបាច់ Download → Upload មកវិញទេ។')
+    website_url = st.text_input('🔗 ដាក់ Link Website', placeholder='https://...')
+    website_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='website_dub_source')
+    website_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='website_dub_target')
+    website_voice_options = {
         'Khmer': {'ប្រុស — Piseth': 'km-KH-PisethNeural', 'ស្រី — Sreymom': 'km-KH-SreymomNeural'},
         'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
         'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
     }
-    web_voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(web_voices[web_target].keys()), key='web_link_dub_voice')
-    if st.button('🌐🎙️ បកប្រែ + Dubbing ពី Link', type='primary', key='web_link_dub_button'):
-        if not get_api_key():
+    website_voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(website_voice_options[website_target].keys()), key='website_dub_voice')
+    if st.button('🌐🎙️ បកប្រែ + Dubbing ពី Link', type='primary', key='website_dub_button'):
+        if not api_key:
             st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-        elif not web_url.strip():
+            st.stop()
+        if not website_url.strip():
             st.warning('សូមដាក់ Link ជាមុន')
-        else:
-            temp_dir = tempfile.mkdtemp()
-            try:
-                with st.spinner('កំពុងយកវីដេអូ → បកប្រែ → Dubbing...'):
-                    result_video = web_link_dubbing(web_url.strip(), web_target, web_voices[web_target][web_voice_label], temp_dir)
-                st.success('✅ Website Dubbing រួចរាល់')
-                st.video(result_video)
-                with open(result_video, 'rb') as f:
-                    web_data = f.read()
-                st.download_button('📥 Download Website Dubbing', web_data, file_name='Smey_Web_Dubbing.mp4', mime='video/mp4', key='web_link_dub_download')
-                st.info('🎵 ភ្លេង Background ត្រូវបានរក្សាទុកតាមដែលអាចធ្វើបាន ហើយសំឡេងនិយាយដើមត្រូវបានកាត់បន្ថយ/ដកចេញ មុនបញ្ចូល Dubbing ថ្មី។')
-            except Exception as e:
-                st.error(f'❌ Website Dubbing មិនបាន: {e}')
+            st.stop()
+        client = get_gemini_client(api_key)
+        temp_dir = tempfile.mkdtemp()
+        input_video = os.path.join(temp_dir, 'website_input.mp4')
+        source_audio = os.path.join(temp_dir, 'website_source.wav')
+        output_video = os.path.join(temp_dir, 'Smey_Website_Dubbing.mp4')
+        try:
+            with st.status('កំពុងដំណើរការ Website Dubbing...', expanded=True) as status:
+                st.write('🌐 1/6 កំពុងយកវីដេអូពី Link ទៅ Server...')
+                webpage_download(website_url.strip(), input_video)
+                st.write('🎧 2/6 កំពុងយកសំឡេង និង Word Timing...')
+                extract_audio(input_video, source_audio)
+                transcription = transcribe(client, source_audio, website_source if website_source != 'Auto' else None)
+                words = words_from(transcription)
+                if not words:
+                    raise RuntimeError('រកមិនឃើញ Word Timing ពី Link នេះ')
+                groups = make_groups(words)
+                st.write('🔄 3/6 កំពុងបកប្រែ...')
+                translated = website_translate_groups(client, groups, website_target)
+                st.write('🎙️ 4/6 កំពុងបង្កើត Dubbing...')
+                total = max((x['end'] for x in groups), default=audio_duration(source_audio))
+                voice = website_voice_options[website_target][website_voice_label]
+                dub_audio = make_dubbing_audio(translated, voice, temp_dir, total)
+                st.write('🎵 5/6 កំពុងបំបែកសំឡេងនិយាយចេញពីភ្លេង...')
+                music_dir = os.path.join(temp_dir, 'separated')
+                music_audio, _ = website_separate_voice(source_audio, music_dir)
+                st.write('🎬 6/6 កំពុងបញ្ចូល ភ្លេងដើម + Dubbing...')
+                website_mix_music_and_dub(input_video, music_audio, dub_audio, output_video)
+                status.update(label='✅ Website Dubbing រួចរាល់!', state='complete')
+            st.video(output_video)
+            with open(output_video, 'rb') as f:
+                website_result = f.read()
+            st.download_button('📥 Download Website Dubbing', website_result, file_name='Smey_Website_Dubbing.mp4', mime='video/mp4', key='download_website_dubbing')
+            st.info('🎵 ភ្លេង/សំឡេង Background ដើមត្រូវបានរក្សា ហើយសំឡេងនិយាយដើមត្រូវបានបំបែកចេញដោយ Demucs មុនដាក់ Dubbing ថ្មី។')
+        except Exception as e:
+            st.error(f'❌ Website Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
 st.divider()
 api_key = get_api_key()
