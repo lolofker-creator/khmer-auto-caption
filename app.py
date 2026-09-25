@@ -355,23 +355,47 @@ def transcribe(client, audio_path, source_language):
     return retry_gemini(call)
 
 def parse_translation_values(response):
+    # Gemini may return structured data in parsed, text, or nested parts.
+    candidates = []
+    parsed = get_value(response, 'parsed', None)
+    if isinstance(parsed, list):
+        candidates.append(parsed)
     raw = get_value(response, 'text', '') or ''
-    raw = str(raw).strip()
-    if not raw:
-        return None
-    raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.I)
-    raw = re.sub(r'\s*```$', '', raw).strip()
-    try:
-        value = json.loads(raw)
+    if raw:
+        candidates.append(str(raw).strip())
+    for candidate in get_value(response, 'candidates', []) or []:
+        content = get_value(candidate, 'content', None)
+        for part in get_value(content, 'parts', []) or []:
+            part_text = get_value(part, 'text', '') or ''
+            if part_text:
+                candidates.append(str(part_text).strip())
+    for raw_value in candidates:
+        if isinstance(raw_value, list):
+            value = raw_value
+        else:
+            raw = re.sub(r'^```(?:json)?\s*', '', raw_value, flags=re.I)
+            raw = re.sub(r'\s*```$', '', raw).strip()
+            try:
+                value = json.loads(raw)
+            except Exception:
+                # Accept one translated line per line as a final fallback.
+                lines = [x.strip().strip('"') for x in raw.splitlines() if x.strip()]
+                value = lines or None
         if isinstance(value, dict):
-            for key in ('translations', 'items', 'lines', 'results'):
+            for key in ('translations', 'items', 'lines', 'results', 'data'):
                 if isinstance(value.get(key), list):
                     value = value[key]
                     break
-        return value if isinstance(value, list) else None
-    except Exception:
-        lines = [x.strip().strip('"') for x in raw.splitlines() if x.strip()]
-        return lines or None
+        if isinstance(value, list):
+            cleaned = []
+            for item in value:
+                if isinstance(item, dict):
+                    item = item.get('translation') or item.get('text') or item.get('translated_text')
+                if item is not None:
+                    cleaned.append(str(item).strip())
+            if cleaned:
+                return cleaned
+    return None
 
 def translate_groups(client, groups, target_language):
     if not groups or target_language == 'No translation':
@@ -404,6 +428,17 @@ def translate_groups(client, groups, target_language):
             try:
                 response = retry_gemini(call)
                 values = parse_translation_values(response)
+                if isinstance(values, list) and len(values) == len(batch):
+                    break
+                # Retry once without structured response enforcement. Some Gemini
+                # versions return empty .text when response_schema is requested.
+                def plain_call(model_name=model_name):
+                    return client.models.generate_content(
+                        model=model_name,
+                        contents=prompt + '\nReturn ONLY the translated lines, one line per input, with no JSON and no numbering.',
+                    )
+                plain_response = retry_gemini(plain_call, attempts=2, delay=1)
+                values = parse_translation_values(plain_response)
                 if isinstance(values, list) and len(values) == len(batch):
                     break
                 raise RuntimeError('Translation response មិនត្រឹមត្រូវ')
