@@ -1,4 +1,4 @@
-name: Build បកប្រែរឿងចិន
+name: Build Smey Auto Caption APK
 on:
   workflow_dispatch:
 jobs:
@@ -116,7 +116,10 @@ jobs:
           cat > app/src/main/java/khmer/smey/autocaption/MainActivity.kt <<'EOF'
           package khmer.smey.autocaption
           import android.app.Activity
+          import android.content.Intent
+          import android.net.Uri
           import android.os.Bundle
+          import android.webkit.ValueCallback
           import android.webkit.WebChromeClient
           import android.webkit.WebSettings
           import android.webkit.WebView
