@@ -979,7 +979,11 @@ def get_voxcpm_client():
         from gradio_client import Client, handle_file
     except ImportError as exc:
         raise RuntimeError('ត្រូវការ gradio_client ក្នុង requirements.txt សម្រាប់ Voice Clone') from exc
-    return Client('openbmb/VoxCPM-Demo')
+    hf_token = secret('HF_TOKEN')
+    kwargs = {}
+    if hf_token:
+        kwargs['token'] = hf_token
+    return Client('openbmb/VoxCPM-Demo', **kwargs)
 
 
 def _save_voxcpm_result(result, output_wav):
@@ -1087,10 +1091,11 @@ def _make_lipsync_client(output_dir):
     except ImportError as exc:
         raise RuntimeError('ត្រូវការ gradio_client សម្រាប់ Lip Sync') from exc
     os.makedirs(output_dir, exist_ok=True)
-    return Client(
-        'manavisrani07/gradio-lipsync-wav2lip',
-        download_files=output_dir,
-    )
+    hf_token = secret('HF_TOKEN')
+    kwargs = {'download_files': output_dir}
+    if hf_token:
+        kwargs['token'] = hf_token
+    return Client('manavisrani07/gradio-lipsync-wav2lip', **kwargs)
 
 
 def _normalize_remote_video_result(result, output_path, client=None):
@@ -1169,7 +1174,7 @@ def run_remote_lipsync(video_path, audio_path, output_path):
             return _normalize_remote_video_result(result, output_path, client)
         except Exception as exc:
             last_error = exc
-    raise RuntimeError('Remote Lip Sync មិនអាចដំណើរការ: ' + str(last_error))
+    raise RuntimeError('Remote Lip Sync មិនអាចដំណើរការ: ' + str(last_error) + ('\n💡 បើមាន 403 Forbidden សូមដាក់ HF_TOKEN (Free Hugging Face Read token) ក្នុង Streamlit Secrets។' if '403' in str(last_error) else ''))
 
 def mix_lipsync_with_background(lipsync_video, original_video, dubbing_audio, output_path):
     """Keep the lip-synced video while restoring the original background bed."""
