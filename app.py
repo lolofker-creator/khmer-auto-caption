@@ -57,30 +57,11 @@ st.markdown(r"""
 </style>
 """, unsafe_allow_html=True)
 
-if os.path.exists(SMEY_LOGO_PATH):
-    st.markdown('<div class="smey-hero">', unsafe_allow_html=True)
-    st.image(SMEY_LOGO_PATH, width=190)
-    st.markdown("""<div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div>
-<div class="smey-sub"><span class="smey-flow">បញ្ចូលវីដេអូ <span class="arrow">→</span> បកប្រែ <span class="arrow">→</span> បង្កើតសំឡេង <span class="arrow">→</span> ដាក់សំឡេងថ្មី <span class="arrow">→</span> MP4 រួចរាល់</span></div></div>""", unsafe_allow_html=True)
-else:
-    st.markdown('<div class="smey-hero"><div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div></div>', unsafe_allow_html=True)
+# ===== ONLY AI DUBBING + VOICE CLONE UI =====
+# Keep the existing working Dubbing and Voice Clone functions intact.
+# Hide/remove the old hero, guide, contact, and other upper UI.
 
-# Reserve the exact position directly under the logo/hero for the REAL AI Dubbing controls.
-# The container is filled later, after all helper functions are defined, so the controls remain fully functional.
 dubbing_slot = st.empty()
-
-st.markdown("""
-<div class="smey-guide">
-  <div class="smey-guide-title">📖 របៀបប្រើ Smey AI Dubbing</div>
-  <div class="smey-guide-sub">ធ្វើតាម 4 ជំហានខាងក្រោម ដើម្បីបង្កើតវីដេអូ Dubbing និង Caption។</div>
-  <div class="smey-step"><span class="smey-num">1</span><span><b>Upload Video</b> — ជ្រើសវីដេអូដែលអ្នកចង់ធ្វើ Dubbing ឬ Caption។</span></div>
-  <div class="smey-step"><span class="smey-num">2</span><span><b>ជ្រើសភាសា</b> — កំណត់ភាសាសំឡេងដើម និងភាសាដែលចង់បម្លែង។</span></div>
-  <div class="smey-step"><span class="smey-num">3</span><span><b>ជ្រើសសំឡេង</b> — ជ្រើស Neural Voice ដែលអ្នកចង់ប្រើសម្រាប់ Dubbing។</span></div>
-  <div class="smey-step"><span class="smey-num">4</span><span><b>បង្កើត MP4</b> — ប្រព័ន្ធនឹង Transcribe → Translate → Voice → Sync ហើយបង្កើតវីដេអូរួចរាល់។</span></div>
-</div>
-<div class="smey-contact">📩 ទំនាក់ទំនងម្ចាស់កម្មវិធី: <a href="https://t.me/Smeytk">Telegram @Smeytk</a></div>
-<div class="smey-divider"></div>
-""", unsafe_allow_html=True)
 
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
@@ -1022,7 +1003,7 @@ with dubbing_slot.container():
         clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
         clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
         clone_reference = st.file_uploader('🎤 Upload Voice Reference', type=['wav','mp3','m4a','aac','ogg','flac'], key='clone_reference')
-        clone_text_hint = st.text_input('📝 Voice Reference Text (Optional)', key='clone_text_hint', placeholder='បើដឹងអត្ថបទដែលនិយាយក្នុងសំឡេង Reference អាចដាក់បាន')
+        clone_text_hint = st.text_input('📝 Voice Reference Text (Optional)', key='clone_text_hint', placeholder='ទុកទំនេរបាន — App នឹងស្តាប់ Voice Reference ដោយ Whisper ដោយស្វ័យប្រវត្តិ')
         if clone_video:
             st.video(clone_video)
         if clone_reference:
@@ -1070,10 +1051,25 @@ with dubbing_slot.container():
                     reference_text = (clone_text_hint or '').strip()
                     if not reference_text:
                         st.write('📝 កំពុងស្គាល់អត្ថបទក្នុង Voice Reference ដោយ Local Whisper...')
-                        ref_words = transcribe_local(reference_audio, clone_source if clone_source != 'Auto' else None)
-                        reference_text = ' '.join(w.get('text', '') for w in ref_words).strip()
-                    if not reference_text:
-                        raise RuntimeError('រកមិនឃើញអត្ថបទក្នុង Voice Reference។ សូមបញ្ចូល Voice Reference Text។')
+                        # Try the selected language first, then Auto, so the user does not
+                        # have to type the reference transcript manually.
+                        ref_attempts = []
+                        if clone_source != 'Auto':
+                            ref_attempts.append(clone_source)
+                        ref_attempts.append('Auto')
+                        for ref_lang in ref_attempts:
+                            try:
+                                ref_words = transcribe_local(reference_audio, None if ref_lang == 'Auto' else ref_lang)
+                                candidate = ' '.join(w.get('text', '') for w in ref_words).strip()
+                                if candidate:
+                                    reference_text = candidate
+                                    break
+                            except Exception:
+                                pass
+                    if reference_text:
+                        st.caption(f'📝 Voice Reference Text: {reference_text}')
+                    else:
+                        raise RuntimeError('Whisper មិនអាចស្គាល់អត្ថបទក្នុង Voice Reference បាន។ សូមប្រើសំឡេងច្បាស់ 5–15 វិនាទី ឬបញ្ចូល Voice Reference Text ដោយដៃ។')
                     import gc
                     gc.collect()
                     clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total)
@@ -1087,7 +1083,7 @@ with dubbing_slot.container():
                 with open(output_video, 'rb') as f:
                     clone_data = f.read()
                 st.download_button('📥 Download Voice Clone MP4', clone_data, file_name='Smey_AI_Voice_Clone.mp4', mime='video/mp4', key='download_clone', on_click='ignore')
-                st.caption('VoxCPM2 ត្រូវការធនធានម៉ាស៊ីនច្រើនជាង Edge TTS ដូច្នេះការបង្កើតអាចយូរជាង AI Dubbing ធម្មតា។')
+                st.caption('Voice Clone CPU អាចចំណាយពេលច្រើនជាង Edge TTS ដូច្នេះការបង្កើតអាចយូរជាង AI Dubbing ធម្មតា។')
             except Exception as e:
                 st.error(f'❌ Voice Clone មិនអាចបញ្ចប់បាន: {e}')
 
