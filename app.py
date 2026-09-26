@@ -900,9 +900,8 @@ def webpage_download(page_url, output_path):
 
 
 # ============================================================
-# VOICE CLONE — VoxCPM2 (additive feature; does not remove AI Dubbing)
+# VOICE CLONE — VoxCPM2 Remote (additive feature; does not remove AI Dubbing)
 # ============================================================
-@st.cache_resource(show_spinner=False)
 @st.cache_resource(show_spinner=False)
 def get_voxcpm_client():
     """Connect to the public Hugging Face VoxCPM-Demo Gradio API.
@@ -911,7 +910,7 @@ def get_voxcpm_client():
     performed by the official OpenBMB demo Space instead.
     """
     try:
-        from gradio_client import Client
+        from gradio_client import Client, handle_file
     except ImportError as exc:
         raise RuntimeError('ត្រូវការ gradio_client ក្នុង requirements.txt សម្រាប់ Voice Clone') from exc
     return Client('openbmb/VoxCPM-Demo')
@@ -981,12 +980,22 @@ def voxcpm_remote_clone_segment(text, reference_wav, reference_text, output_wav,
     # Current OpenBMB VoxCPM-Demo exposes the Gradio endpoint /generate with
     # these 8 inputs: text, control, reference audio, prompt-text toggle,
     # prompt text, CFG, normalize, and reference denoise.
+    try:
+        from gradio_client import handle_file
+    except ImportError as exc:
+        raise RuntimeError('ត្រូវការ gradio_client សម្រាប់ Voice Clone') from exc
+
     client = get_voxcpm_client()
     use_prompt_text = bool((reference_text or '').strip())
+
+    # IMPORTANT: New Gradio API expects FileData, not a plain local path.
+    # handle_file() creates the required {'path': ..., 'meta': {'_type': 'gradio.FileData'}} payload.
+    reference_file = handle_file(reference_wav)
+
     result = client.predict(
         text,
         (control_instruction or '').strip(),
-        reference_wav,
+        reference_file,
         use_prompt_text,
         (reference_text or '').strip() if use_prompt_text else '',
         2.0,
