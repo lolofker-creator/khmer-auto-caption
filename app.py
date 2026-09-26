@@ -1091,8 +1091,28 @@ def make_voice_clone_audio(translated_groups, reference_wav, reference_text, tem
         raw = os.path.join(temp_dir, f'clone_raw_{i:04d}.wav')
         fitted = os.path.join(temp_dir, f'clone_fit_{i:04d}.wav')
         voxcpm_remote_clone_segment(text, reference_wav, reference_text, raw)
-        fit_audio_to_duration(raw, fitted, end - start)
-        segment_files.append((fitted, start, end))
+        # Do NOT aggressively squeeze every cloned sentence into the original
+        # subtitle duration. That makes VoxCPM speech sound warped/garbled.
+        # Keep clone speech close to natural speed; only use gentle time-stretch.
+        actual = audio_duration(raw)
+        target = max(0.6, end - start)
+        ratio = actual / target if actual > 0 else 1.0
+        if ratio > 1.25:
+            # Cap speed-up at 25%; preserve intelligibility instead of forcing
+            # very short Chinese/Khmer segments to play unnaturally fast.
+            af = 'atempo=1.25'
+        elif ratio < 0.80:
+            af = 'atempo=0.80'
+        else:
+            af = f'atempo={ratio:.6f}'
+        cmd_fit = [ffmpeg(), '-y', '-i', raw, '-af', af, '-ac', '1', '-ar', '24000', fitted]
+        rr = subprocess.run(cmd_fit, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if rr.returncode != 0:
+            raise RuntimeError('Voice Clone audio fitting failed: ' + rr.stderr.decode('utf-8', errors='ignore')[-2000:])
+        # Use the real generated duration when it is longer than the subtitle
+        # slot; do not cut the cloned words in half.
+        generated_end = start + audio_duration(fitted)
+        segment_files.append((fitted, start, max(end, generated_end)))
 
     if not segment_files:
         raise RuntimeError('មិនមានអត្ថបទសម្រាប់ Voice Clone')
@@ -1113,7 +1133,7 @@ def make_voice_clone_audio(translated_groups, reference_wav, reference_text, tem
         labels.append(f'[{label}]')
     filters.append('[0:a]' + ''.join(labels) + f'amix=inputs={len(labels)+1}:duration=longest:normalize=0[vo]')
     mixed = os.path.join(temp_dir, 'voice_clone_mixed.wav')
-    command = [ffmpeg(), '-y'] + inputs + ['-filter_complex', ';'.join(filters), '-map', '[vo]', '-t', str(max(0.2, total_duration)), '-ar', '16000', '-ac', '1', mixed]
+    command = [ffmpeg(), '-y'] + inputs + ['-filter_complex', ';'.join(filters), '-map', '[vo]', '-t', str(max(0.2, total_duration)), '-ar', '24000', '-ac', '1', mixed]
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
         err = result.stderr.decode('utf-8', errors='ignore')
@@ -1265,7 +1285,7 @@ with dubbing_slot.container():
                             with open(output_video, 'rb') as f:
                                 clone_data = f.read()
                             st.download_button('📥 Download Voice Clone MP4', clone_data, file_name='Smey_AI_Voice_Clone.mp4', mime='video/mp4', key='download_clone', on_click='ignore')
-                            st.caption('Voice Clone CPU អាចចំណាយពេលច្រើនជាង Edge TTS ដូច្នេះការបង្កើតអាចយូរជាង AI Dubbing ធម្មតា។')
+                            st.caption('Voice Clone Remote: រក្សាសំឡេងធម្មជាតិ មិនបង្ខំល្បឿនខ្លាំងពេក។')
                         except Exception as e:
                             st.error(f'❌ Voice Clone មិនអាចបញ្ចប់បាន: {e}')
 
