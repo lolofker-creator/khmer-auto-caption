@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
 FONT_PATH = os.path.join(FONT_DIR, 'NotoSansKhmer-Regular.ttf')
 FONT_URL = 'https://raw.githubusercontent.com/ghostlypi/NotoSans/main/NotoSansKhmer-Regular.ttf'
-WHISPER_MODEL = 'large-v3'
+WHISPER_MODEL = 'small'
 
 
 def secret(name):
