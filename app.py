@@ -888,25 +888,29 @@ def load_voxcpm2_model():
         from voxcpm import VoxCPM
     except ImportError as exc:
         raise RuntimeError('Voice Clone ត្រូវការ package voxcpm ក្នុង requirements.txt') from exc
-    # VoxCPM2 supports reference_wav_path for zero-shot voice cloning.
+    # Use the smaller 0.5B model so the free Streamlit CPU environment can stay usable.
+    # Voice cloning is done with prompt_wav_path + prompt_text.
     return VoxCPM.from_pretrained(
-        'openbmb/VoxCPM2',
+        'openbmb/VoxCPM-0.5B',
         load_denoiser=False,
+        optimize=False,
         device='cpu',
     )
 
 
-def voxcpm2_clone_segment(model, text, reference_wav, output_wav):
+def voxcpm2_clone_segment(model, text, reference_wav, output_wav, reference_text):
     import soundfile as sf
     text = re.sub(r'\s+', ' ', str(text or '')).strip()
     if not text:
         raise ValueError('អត្ថបទសម្រាប់ Voice Clone ទទេ')
     wav = model.generate(
         text=text,
-        reference_wav_path=reference_wav,
+        prompt_wav_path=reference_wav,
+        prompt_text=reference_text,
         cfg_value=2.0,
-        inference_timesteps=10,
+        inference_timesteps=6,
         normalize=True,
+        denoise=False,
     )
     sf.write(output_wav, wav, model.tts_model.sample_rate)
     if not os.path.isfile(output_wav) or os.path.getsize(output_wav) < 1000:
@@ -914,7 +918,7 @@ def voxcpm2_clone_segment(model, text, reference_wav, output_wav):
     return output_wav
 
 
-def make_voice_clone_audio(translated_groups, reference_wav, temp_dir, total_duration):
+def make_voice_clone_audio(translated_groups, reference_wav, reference_text, temp_dir, total_duration):
     """Generate cloned-voice segments and place them on the original timeline."""
     clone_model = load_voxcpm2_model()
     timeline = os.path.join(temp_dir, 'voice_clone_timeline.wav')
@@ -930,7 +934,7 @@ def make_voice_clone_audio(translated_groups, reference_wav, temp_dir, total_dur
             end = start + 0.8
         raw = os.path.join(temp_dir, f'clone_raw_{i:04d}.wav')
         fitted = os.path.join(temp_dir, f'clone_fit_{i:04d}.wav')
-        voxcpm2_clone_segment(clone_model, text, reference_wav, raw)
+        voxcpm2_clone_segment(clone_model, text, reference_wav, raw, reference_text)
         fit_audio_to_duration(raw, fitted, end - start)
         segment_files.append((fitted, start, end))
         normalized_groups.append({'text': text, 'start': start, 'end': end})
@@ -1013,7 +1017,7 @@ with dubbing_slot.container():
 
 
     with st.expander('🎙️ Voice Clone — Clone សំឡេងពិតពី Voice Reference', expanded=False):
-        st.info('🎙️ Upload សម្លេង Reference 5–15 វិនាទី → VoxCPM2 Clone សម្លេង → និយាយអត្ថបទ Dubbing → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។')
+        st.info('🎙️ Upload សម្លេង Reference 5–15 វិនាទី → Voice Clone → និយាយអត្ថបទ Dubbing → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។\n\n⚠️ Free/CPU mode ប្រើ VoxCPM-0.5B ដើម្បីកុំឱ្យ Streamlit crash។ វាជាម៉ូដែលស្រាលជាង ប៉ុន្តែភាសាដែលបានបញ្ជាក់ជាផ្លូវការគឺ English/Chinese.')
         clone_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='clone_source')
         clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
         clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
@@ -1062,7 +1066,17 @@ with dubbing_slot.container():
 
                     st.write('🎙️ 3/5 កំពុង Clone សំឡេងដោយ VoxCPM2...')
                     total = max((x['end'] for x in groups), default=audio_duration(source_audio))
-                    clone_audio = make_voice_clone_audio(translated, reference_audio, temp_dir, total)
+                    # VoxCPM-0.5B needs transcript text for prompt-based voice cloning.
+                    reference_text = (clone_text_hint or '').strip()
+                    if not reference_text:
+                        st.write('📝 កំពុងស្គាល់អត្ថបទក្នុង Voice Reference ដោយ Local Whisper...')
+                        ref_words = transcribe_local(reference_audio, clone_source if clone_source != 'Auto' else None)
+                        reference_text = ' '.join(w.get('text', '') for w in ref_words).strip()
+                    if not reference_text:
+                        raise RuntimeError('រកមិនឃើញអត្ថបទក្នុង Voice Reference។ សូមបញ្ចូល Voice Reference Text។')
+                    import gc
+                    gc.collect()
+                    clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total)
 
                     st.write('🎬 4/5 កំពុង Sync + រក្សា Background Music...')
                     replace_video_audio(input_video, clone_audio, output_video)
