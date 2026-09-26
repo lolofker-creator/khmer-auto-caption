@@ -5,4 +5,5 @@ yt-dlp
 gTTS
 imageio-ffmpeg
 gradio_client
-google-genai
+soundfile
+numpy
