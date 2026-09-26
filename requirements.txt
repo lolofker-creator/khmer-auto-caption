@@ -1,9 +1,8 @@
 streamlit
+google-genai
 faster-whisper
-edge-tts
+imageio-ffmpeg
+av
 yt-dlp
 gTTS
-imageio-ffmpeg
-voxcpm>=2.0.3
-soundfile
-numpy
+edge-tts
