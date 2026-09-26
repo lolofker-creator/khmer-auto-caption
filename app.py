@@ -617,12 +617,13 @@ def edge_tts_voice(text, output_mp3, voice, rate='+0%', pitch='+0Hz'):
     return output_mp3
 
 def natural_rate_for_duration(text, target_seconds):
-    # ប៉ាន់ស្មានល្បឿនធម្មជាតិ ហើយកែតែបន្តិច ដើម្បីកុំឱ្យសំឡេងខូចពី atempo ខ្លាំងពេក។
+    # Human-like Khmer pacing: avoid aggressive speed changes that make AI speech sound robotic.
     chars = max(1, len(re.sub(r'\s+', '', text)))
-    natural_seconds = max(0.8, chars / 7.0)
-    ratio = natural_seconds / max(0.25, target_seconds)
+    natural_seconds = max(0.9, chars / 6.2)
+    ratio = natural_seconds / max(0.35, target_seconds)
     percent = int(round((ratio - 1.0) * 100))
-    percent = max(-35, min(45, percent))
+    # Keep Edge Neural prosody close to normal human speech.
+    percent = max(-18, min(18, percent))
     return f'{percent:+d}%'
 
 
@@ -641,13 +642,17 @@ def fit_audio_to_duration(input_audio, output_audio, target_seconds):
     if actual <= 0:
         raise RuntimeError('រកមិនឃើញរយៈពេលសំឡេង Dubbing')
     ratio=actual/target_seconds
-    # atempo accepts 0.5..2.0 per filter; chain filters for larger changes.
+    # Keep time-stretch close to 1.0 so consonants and vowels remain natural.
     filters=[]
-    while ratio>2.0:
-        filters.append('atempo=2.0'); ratio/=2.0
-    while ratio<0.5:
-        filters.append('atempo=0.5'); ratio/=0.5
+    while ratio>1.35:
+        filters.append('atempo=1.35'); ratio/=1.35
+    while ratio<0.74:
+        filters.append('atempo=0.74'); ratio/=0.74
     filters.append(f'atempo={ratio:.6f}')
+    # Gentle broadcast-style cleanup: warmth, clarity and controlled dynamics.
+    filters.insert(0, 'highpass=f=65')
+    filters.insert(1, 'lowpass=f=14000')
+    filters.insert(2, 'acompressor=threshold=-20dB:ratio=2.2:attack=18:release=140:makeup=2')
     cmd=[ffmpeg(),'-y','-i',input_audio,'-af',','.join(filters),'-ac','2','-ar','48000',output_audio]
     r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     if r.returncode!=0:
@@ -794,7 +799,7 @@ def webpage_download(page_url, output_path):
 st.divider()
 api_key = get_api_key()
 with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
-    st.caption('ប្រើ Khmer Neural Voice ធម្មជាតិ និងកែល្បឿនតែបន្តិច ដើម្បីរក្សាអារម្មណ៍ដូចមនុស្ស។')
+    st.caption('🎙️ Human-like Neural Voice — សំឡេងទន់ ធម្មជាតិ និងកុំឱ្យលឿន/យឺតខ្លាំងពេក។')
     dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
     dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
     voice_options = {
@@ -841,7 +846,7 @@ with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ
             with open(output_video,'rb') as f:
                 dubbing_data = f.read()
             st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
-            st.info('ℹ️ ប្រើ Khmer Neural Voice + កែល្បឿនតាម timing។ វាជា AI voice ដែលមានសំឡេងធម្មជាតិ មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។ Lip-sync មាត់ពិតៗ មិនទាន់បញ្ចូល។')
+            st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
         except Exception as e:
             st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
