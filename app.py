@@ -40,10 +40,8 @@ st.markdown(r"""
 .smey-feature b{color:#4dc8ff}
 .smey-contact{text-align:center;margin:8px 0 20px;font-size:13px;color:#cdd5e2}.smey-contact a{color:#3db8ff!important;text-decoration:none!important;font-weight:800}
 .smey-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);margin:8px 0 20px}
-.smey-nav{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid rgba(120,170,220,.22);border-radius:24px;overflow:hidden;background:rgba(10,17,28,.88);box-shadow:0 15px 35px rgba(0,0,0,.30);margin:4px 0 22px}
-.smey-nav-item{min-height:86px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:#d7deea;border-right:1px solid rgba(255,255,255,.06);font-size:12px;text-align:center}
-.smey-nav-item:last-child{border-right:0}.smey-nav-item.active{margin:4px;border:1px solid rgba(20,151,255,.75);border-radius:20px;background:linear-gradient(180deg,rgba(15,119,235,.34),rgba(0,91,190,.14));color:#18bfff;box-shadow:inset 0 0 25px rgba(0,132,255,.12)}
-.smey-nav-icon{font-size:25px;line-height:1}
+.smey-real-controls{margin:0 0 14px;padding:14px 16px;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:rgba(255,255,255,.035)}
+.smey-real-title{font-size:16px;font-weight:900;color:#f3f6fb}.smey-real-sub{font-size:12px;color:#aeb8c8;margin-top:4px}
 [data-testid="stExpander"]{border:1px solid rgba(255,255,255,.10)!important;border-radius:19px!important;background:rgba(16,20,28,.86)!important;box-shadow:0 12px 34px rgba(0,0,0,.20);overflow:hidden}
 [data-testid="stExpander"] summary{font-weight:850!important}
 [data-baseweb="select"]>div,.stTextInput input,[data-testid="stFileUploaderDropzone"]{border-radius:14px!important;border-color:rgba(255,255,255,.13)!important;background:rgba(255,255,255,.045)!important}
@@ -52,7 +50,7 @@ st.markdown(r"""
 .stButton>button:hover,.stDownloadButton>button:hover{transform:translateY(-1px);filter:brightness(1.06);box-shadow:0 9px 24px rgba(0,0,0,.24)}
 [data-testid="stStatusWidget"],[data-testid="stAlert"]{border-radius:16px!important}
 [data-testid="stVideo"] video{border-radius:18px;box-shadow:0 14px 35px rgba(0,0,0,.30)}
-@media(max-width:700px){.block-container{padding:8px 12px 28px}.smey-title{font-size:36px}.smey-sub{font-size:12.5px;margin-top:12px}.smey-feature{font-size:13px;gap:10px;padding:7px 0}.smey-icon{width:37px;height:37px;min-width:37px;font-size:20px;border-radius:10px}.smey-nav{border-radius:20px}.smey-nav-item{min-height:74px;font-size:10.5px}.smey-nav-icon{font-size:22px}}
+@media(max-width:700px){.block-container{padding:8px 12px 28px}.smey-title{font-size:34px}.smey-sub{font-size:12.5px;margin-top:12px}.smey-feature{font-size:13px;gap:10px;padding:7px 0}.smey-icon{width:37px;height:37px;min-width:37px;font-size:20px;border-radius:10px}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,12 +72,7 @@ st.markdown("""
 </div>
 <div class="smey-contact">📩 ទំនាក់ទំនងម្ចាស់កម្មវិធី: <a href="https://t.me/Smeytk">Telegram @Smeytk</a></div>
 <div class="smey-divider"></div>
-<div class="smey-nav">
-  <div class="smey-nav-item active"><div class="smey-nav-icon">⌂</div><div>ទំព័រដើម</div></div>
-  <div class="smey-nav-item"><div class="smey-nav-icon">▤</div><div>បញ្ចូលវីដេអូ</div></div>
-  <div class="smey-nav-item"><div class="smey-nav-icon">🛠</div><div>កំណត់រៀបចំ</div></div>
-  <div class="smey-nav-item"><div class="smey-nav-icon">⚙</div><div>សេវាកម្ម</div></div>
-</div>
+<div class="smey-real-controls"><div class="smey-real-title">🎬 ចាប់ផ្ដើមប្រើកម្មវិធី</div><div class="smey-real-sub">មុខងារខាងក្រោមអាចចុច និងប្រើបានពិតៗ។</div></div>
 """, unsafe_allow_html=True)
 
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
