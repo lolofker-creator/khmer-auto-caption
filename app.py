@@ -315,6 +315,44 @@ def transcribe_local(audio_path, source_language):
     return words
 
 
+def transcribe_reference_text(audio_path, source_language='Auto'):
+    """Transcribe Voice Reference text for prompt-based VoxCPM cloning.
+
+    This is intentionally separate from word-timestamp transcription. A short
+    reference can have valid segment text but no word objects, especially with
+    VAD/very short audio. We therefore disable VAD and read segment.text.
+    """
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        raise RuntimeError('ត្រូវការ faster-whisper សម្រាប់ Auto Voice Reference Text') from exc
+
+    lang = None
+    if source_language == 'Chinese':
+        lang = 'zh'
+    elif source_language == 'Khmer':
+        lang = 'km'
+    elif source_language == 'English':
+        lang = 'en'
+
+    model = WhisperModel('small', device='cpu', compute_type='int8')
+    segments, _info = model.transcribe(
+        audio_path,
+        language=lang,
+        word_timestamps=False,
+        vad_filter=False,
+        beam_size=5,
+        condition_on_previous_text=False,
+        temperature=0.0,
+    )
+    parts = []
+    for segment in segments:
+        text = (getattr(segment, 'text', '') or '').strip()
+        if text:
+            parts.append(text)
+    return re.sub(r'\s+', ' ', ' '.join(parts)).strip()
+
+
 def _detect_source_language(text, source_language='Auto'):
     """Resolve the source language reliably when UI is set to Auto."""
     if source_language and source_language != 'Auto':
@@ -1064,8 +1102,7 @@ with dubbing_slot.container():
                                     ref_attempts.append('Auto')
                                     for ref_lang in ref_attempts:
                                         try:
-                                            ref_words = transcribe_local(reference_audio, None if ref_lang == 'Auto' else ref_lang)
-                                            candidate = ' '.join(w.get('text', '') for w in ref_words).strip()
+                                            candidate = transcribe_reference_text(reference_audio, ref_lang)
                                             if candidate:
                                                 reference_text = candidate
                                                 break
@@ -1074,7 +1111,7 @@ with dubbing_slot.container():
                                 if reference_text:
                                     st.caption(f'📝 Voice Reference Text: {reference_text}')
                                 else:
-                                    raise RuntimeError('Whisper មិនអាចស្គាល់អត្ថបទក្នុង Voice Reference បាន។ សូមប្រើសំឡេងច្បាស់ 5–15 វិនាទី ឬបញ្ចូល Voice Reference Text ដោយដៃ។')
+                                    raise RuntimeError('មិនអាចស្គាល់ Voice Reference Text ដោយស្វ័យប្រវត្តិ។ សូមប្រើសំឡេងមនុស្សនិយាយច្បាស់ 5–15 វិនាទី (គ្មានភ្លេង/សំឡេងរំខាន) ឬបញ្ចូល Voice Reference Text ដោយដៃ។')
                                 import gc
                                 gc.collect()
                                 clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total)
