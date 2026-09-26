@@ -42,6 +42,7 @@ st.markdown(r"""
 .smey-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);margin:8px 0 20px}
 .smey-real-controls{margin:0 0 14px;padding:14px 16px;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:rgba(255,255,255,.035)}
 .smey-real-title{font-size:16px;font-weight:900;color:#f3f6fb}.smey-real-sub{font-size:12px;color:#aeb8c8;margin-top:4px}
+.smey-dubbing-top{margin:2px 0 14px}
 [data-testid="stExpander"]{border:1px solid rgba(255,255,255,.10)!important;border-radius:19px!important;background:rgba(16,20,28,.86)!important;box-shadow:0 12px 34px rgba(0,0,0,.20);overflow:hidden}
 [data-testid="stExpander"] summary{font-weight:850!important}
 [data-baseweb="select"]>div,.stTextInput input,[data-testid="stFileUploaderDropzone"]{border-radius:14px!important;border-color:rgba(255,255,255,.13)!important;background:rgba(255,255,255,.045)!important}
@@ -61,6 +62,10 @@ if os.path.exists(SMEY_LOGO_PATH):
 <div class="smey-sub"><span class="smey-flow">បញ្ចូលវីដេអូ <span class="arrow">→</span> បកប្រែ <span class="arrow">→</span> បង្កើតសំឡេង <span class="arrow">→</span> ដាក់សំឡេងថ្មី <span class="arrow">→</span> MP4 រួចរាល់</span></div></div>""", unsafe_allow_html=True)
 else:
     st.markdown('<div class="smey-hero"><div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div></div>', unsafe_allow_html=True)
+
+# Reserve the exact position directly under the logo/hero for the REAL AI Dubbing controls.
+# The container is filled later, after all helper functions are defined, so the controls remain fully functional.
+dubbing_slot = st.empty()
 
 st.markdown("""
 <div class="smey-features">
@@ -851,57 +856,58 @@ def webpage_download(page_url, output_path):
     return page_media_download(page_url, output_path)
 
 
-st.divider()
 api_key = get_api_key()
-with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
-    st.caption('🎙️ Human-like Neural Voice — សំឡេងទន់ ធម្មជាតិ និងកុំឱ្យលឿន/យឺតខ្លាំងពេក។')
-    dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
-    dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
-    voice_options = {
-        'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
-        'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
-        'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
-    }
-    voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
-    dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
-    if dub_video:
-        st.video(dub_video)
-    if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
-        if not api_key:
-            st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-            st.stop()
-        if not dub_video:
-            st.warning('សូម Upload Video ជាមុន')
-            st.stop()
-        client=get_gemini_client(api_key)
-        temp_dir=tempfile.mkdtemp()
-        input_video=os.path.join(temp_dir,'dub_input.mp4')
-        audio_path=os.path.join(temp_dir,'dub_source.wav')
-        output_video=os.path.join(temp_dir,'Smey_AI_Dubbing.mp4')
-        try:
-            with open(input_video,'wb') as f: f.write(dub_video.getbuffer())
-            with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
-                st.write('🎧 1/4 កំពុងយកសំឡេង និង Word Timing...')
-                extract_audio(input_video,audio_path)
-                transcription=transcribe(client,audio_path,dub_source if dub_source!='Auto' else None)
-                words=words_from(transcription)
-                if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
-                groups=make_groups(words)
-                st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
-                translated=translate_groups(client,groups,dub_target,dub_source)
-                st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
-                total=max((x['end'] for x in groups), default=audio_duration(audio_path))
-                voice=voice_options[dub_target][voice_label]
-                dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
-                st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
-                replace_video_audio(input_video,dub_audio,output_video)
-                status.update(label='✅ Dubbing រួចរាល់!',state='complete')
-            st.subheader('🎬 Result Dubbing')
-            st.video(output_video)
-            with open(output_video,'rb') as f:
-                dubbing_data = f.read()
-            st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
-            st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
-        except Exception as e:
-            st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
+with dubbing_slot.container():
+    st.markdown('<div class="smey-dubbing-top">', unsafe_allow_html=True)
+    with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing', expanded=True):
+        st.caption('🎙️ Human-like Neural Voice — សំឡេងទន់ ធម្មជាតិ និងកុំឱ្យលឿន/យឺតខ្លាំងពេក។')
+        dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
+        dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
+        voice_options = {
+            'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
+            'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
+            'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
+        }
+        voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
+        dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
+        if dub_video:
+            st.video(dub_video)
+        if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
+            if not api_key:
+                st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
+                st.stop()
+            if not dub_video:
+                st.warning('សូម Upload Video ជាមុន')
+                st.stop()
+            client=get_gemini_client(api_key)
+            temp_dir=tempfile.mkdtemp()
+            input_video=os.path.join(temp_dir,'dub_input.mp4')
+            audio_path=os.path.join(temp_dir,'dub_source.wav')
+            output_video=os.path.join(temp_dir,'Smey_AI_Dubbing.mp4')
+            try:
+                with open(input_video,'wb') as f: f.write(dub_video.getbuffer())
+                with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
+                    st.write('🎧 1/4 កំពុងយកសំឡេង និង Word Timing...')
+                    extract_audio(input_video,audio_path)
+                    transcription=transcribe(client,audio_path,dub_source if dub_source!='Auto' else None)
+                    words=words_from(transcription)
+                    if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
+                    groups=make_groups(words)
+                    st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
+                    translated=translate_groups(client,groups,dub_target,dub_source)
+                    st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
+                    total=max((x['end'] for x in groups), default=audio_duration(audio_path))
+                    voice=voice_options[dub_target][voice_label]
+                    dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
+                    st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
+                    replace_video_audio(input_video,dub_audio,output_video)
+                    status.update(label='✅ Dubbing រួចរាល់!',state='complete')
+                st.subheader('🎬 Result Dubbing')
+                st.video(output_video)
+                with open(output_video,'rb') as f:
+                    dubbing_data = f.read()
+                st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
+                st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
+            except Exception as e:
+                st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
