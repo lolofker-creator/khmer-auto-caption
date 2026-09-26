@@ -21,20 +21,29 @@ st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='c
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SMEY_LOGO_PATH = os.path.join(BASE_DIR, 'smey_ai_dubbing_logo.png')
 
-# ===== BEAUTIFUL UI v8 — clean guide, no fake top buttons =====
+# ===== BEAUTIFUL UI v13 — mobile hero style =====
 st.markdown(r"""
 <style>
-.stApp{background:radial-gradient(circle at 90% 0%,rgba(255,74,55,.16),transparent 30%),radial-gradient(circle at 5% 20%,rgba(50,120,255,.10),transparent 28%),linear-gradient(180deg,#0a0d13 0%,#101621 55%,#090c11 100%);color:#f7f8fb}
+.stApp{background:radial-gradient(circle at 50% -8%,rgba(40,91,180,.16),transparent 34%),linear-gradient(180deg,#070b12 0%,#0b111b 48%,#06090e 100%);color:#f7f8fb}
 [data-testid="stHeader"]{background:transparent}
 #MainMenu,footer{visibility:hidden}
-.block-container{max-width:760px;padding:14px 14px 42px}
-.smey-logo-wrap{display:flex;justify-content:center;align-items:center;margin:2px 0 12px}
-.smey-logo{width:112px;height:112px;object-fit:contain;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.30)}
-.smey-guide{border:1px solid rgba(255,255,255,.10);border-radius:22px;padding:19px 18px;margin:4px 0 18px;background:linear-gradient(145deg,rgba(255,68,55,.15),rgba(255,255,255,.045));box-shadow:0 14px 38px rgba(0,0,0,.25)}
-.smey-guide-title{font-size:20px;font-weight:900;margin-bottom:10px}
-.smey-guide-sub{font-size:13px;color:#cbd2de;line-height:1.6;margin-bottom:12px}
-.smey-step{display:flex;gap:10px;align-items:flex-start;padding:8px 0;font-size:13px;line-height:1.55;color:#eef1f6}
-.smey-num{min-width:25px;height:25px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,74,55,.22);border:1px solid rgba(255,100,80,.35);font-weight:900}
+.block-container{max-width:760px;padding:12px 16px 38px}
+.smey-hero{text-align:center;margin:0 auto 18px}
+.smey-title{font-size:43px;line-height:1.02;font-weight:950;letter-spacing:-1.5px;margin:0}
+.smey-title .white{color:#f5f7fb}.smey-title .blue{color:#66d7ff}
+.smey-sub{font-size:14px;color:#e8edf6;line-height:1.7;margin:15px auto 18px;max-width:690px}
+.smey-flow{color:#f1f4f8;font-weight:650}.smey-flow .arrow{color:#62cfff;padding:0 3px}
+.smey-features{margin:8px 0 22px;padding:2px 4px 0}
+.smey-feature{display:flex;align-items:center;gap:14px;padding:8px 0;color:#f3f5f9;font-size:15px;line-height:1.45}
+.smey-icon{width:42px;height:42px;min-width:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:23px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);box-shadow:0 7px 20px rgba(0,0,0,.18)}
+.smey-icon.mic{color:#18e5dd}.smey-icon.cap{color:#55bfff}.smey-icon.voice{color:#ff5366}.smey-icon.img{color:#d46cff}.smey-icon.down{color:#2ee9aa}
+.smey-feature b{color:#4dc8ff}
+.smey-contact{text-align:center;margin:8px 0 20px;font-size:13px;color:#cdd5e2}.smey-contact a{color:#3db8ff!important;text-decoration:none!important;font-weight:800}
+.smey-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);margin:8px 0 20px}
+.smey-nav{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid rgba(120,170,220,.22);border-radius:24px;overflow:hidden;background:rgba(10,17,28,.88);box-shadow:0 15px 35px rgba(0,0,0,.30);margin:4px 0 22px}
+.smey-nav-item{min-height:86px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:#d7deea;border-right:1px solid rgba(255,255,255,.06);font-size:12px;text-align:center}
+.smey-nav-item:last-child{border-right:0}.smey-nav-item.active{margin:4px;border:1px solid rgba(20,151,255,.75);border-radius:20px;background:linear-gradient(180deg,rgba(15,119,235,.34),rgba(0,91,190,.14));color:#18bfff;box-shadow:inset 0 0 25px rgba(0,132,255,.12)}
+.smey-nav-icon{font-size:25px;line-height:1}
 [data-testid="stExpander"]{border:1px solid rgba(255,255,255,.10)!important;border-radius:19px!important;background:rgba(16,20,28,.86)!important;box-shadow:0 12px 34px rgba(0,0,0,.20);overflow:hidden}
 [data-testid="stExpander"] summary{font-weight:850!important}
 [data-baseweb="select"]>div,.stTextInput input,[data-testid="stFileUploaderDropzone"]{border-radius:14px!important;border-color:rgba(255,255,255,.13)!important;background:rgba(255,255,255,.045)!important}
@@ -43,27 +52,36 @@ st.markdown(r"""
 .stButton>button:hover,.stDownloadButton>button:hover{transform:translateY(-1px);filter:brightness(1.06);box-shadow:0 9px 24px rgba(0,0,0,.24)}
 [data-testid="stStatusWidget"],[data-testid="stAlert"]{border-radius:16px!important}
 [data-testid="stVideo"] video{border-radius:18px;box-shadow:0 14px 35px rgba(0,0,0,.30)}
-@media(max-width:700px){.block-container{padding:9px 10px 30px}.smey-guide{padding:17px 15px;border-radius:19px}.smey-guide-title{font-size:18px}.smey-step{font-size:12.5px}}
+@media(max-width:700px){.block-container{padding:8px 12px 28px}.smey-title{font-size:36px}.smey-sub{font-size:12.5px;margin-top:12px}.smey-feature{font-size:13px;gap:10px;padding:7px 0}.smey-icon{width:37px;height:37px;min-width:37px;font-size:20px;border-radius:10px}.smey-nav{border-radius:20px}.smey-nav-item{min-height:74px;font-size:10.5px}.smey-nav-icon{font-size:22px}}
 </style>
-
-<div class="smey-guide">
-  <div class="smey-guide-title">🇰🇭 របៀបប្រើ Smey Auto Caption</div>
-  <div class="smey-guide-sub">ធ្វើតាម 4 ជំហានខាងក្រោម ដើម្បីបង្កើតវីដេអូ Dubbing និង Caption។</div>
-  <div class="smey-step"><span class="smey-num">1</span><span><b>Upload Video</b> — ជ្រើសវីដេអូដែលអ្នកចង់ធ្វើ Dubbing ឬ Caption។</span></div>
-  <div class="smey-step"><span class="smey-num">2</span><span><b>ជ្រើសភាសា</b> — កំណត់ភាសាសំឡេងដើម និងភាសាដែលចង់បម្លែង។</span></div>
-  <div class="smey-step"><span class="smey-num">3</span><span><b>ជ្រើសសំឡេង</b> — ជ្រើស Khmer Neural Voice ប្រុស ឬ ស្រី ហើយចុច <b>បង្កើត Dubbing</b>។</span></div>
-  <div class="smey-step"><span class="smey-num">4</span><span><b>រង់ចាំរួចរាល់</b> — ប្រព័ន្ធនឹង Transcribe → Translate → Voice → Sync ហើយបង្កើត MP4 សម្រាប់ Download។</span></div>
-</div>
 """, unsafe_allow_html=True)
 
 if os.path.exists(SMEY_LOGO_PATH):
-    _logo_l, _logo_c, _logo_r = st.columns([1, 1, 1])
-    with _logo_c:
-        st.image(SMEY_LOGO_PATH, width=112)
+    st.markdown('<div class="smey-hero">', unsafe_allow_html=True)
+    st.image(SMEY_LOGO_PATH, width=190)
+    st.markdown("""<div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div>
+<div class="smey-sub"><span class="smey-flow">បញ្ចូលវីដេអូ <span class="arrow">→</span> បកប្រែ <span class="arrow">→</span> បង្កើតសំឡេង <span class="arrow">→</span> ដាក់សំឡេងថ្មី <span class="arrow">→</span> MP4 រួចរាល់</span></div></div>""", unsafe_allow_html=True)
+else:
+    st.markdown('<div class="smey-hero"><div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div></div>', unsafe_allow_html=True)
 
-st.title('🇰🇭 Smey AI Dubbing')
-st.caption('🎙️ Khmer Neural Natural Voice → Dubbing → Sync Timing')
-st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
+st.markdown("""
+<div class="smey-features">
+  <div class="smey-feature"><span class="smey-icon mic">🎙️</span><span>ភាសា: <b>ចិន / អង់គ្លេស / ខ្មែរ</b></span></div>
+  <div class="smey-feature"><span class="smey-icon cap">▤</span><span>បង្កើត <b>Caption ខ្មែរ</b> ដោយស្វ័យប្រវត្តិ</span></div>
+  <div class="smey-feature"><span class="smey-icon voice">🔊</span><span>AI Dubbing (សំឡេងខ្មែរ) + Auto Sync</span></div>
+  <div class="smey-feature"><span class="smey-icon img">🖼️</span><span>AI Image Generation (Hugging Face)</span></div>
+  <div class="smey-feature"><span class="smey-icon down">⬇️</span><span>Direct Video Downloader (MP4/WebM/MOV)</span></div>
+</div>
+<div class="smey-contact">📩 ទំនាក់ទំនងម្ចាស់កម្មវិធី: <a href="https://t.me/Smeytk">Telegram @Smeytk</a></div>
+<div class="smey-divider"></div>
+<div class="smey-nav">
+  <div class="smey-nav-item active"><div class="smey-nav-icon">⌂</div><div>ទំព័រដើម</div></div>
+  <div class="smey-nav-item"><div class="smey-nav-icon">▤</div><div>បញ្ចូលវីដេអូ</div></div>
+  <div class="smey-nav-item"><div class="smey-nav-icon">🛠</div><div>កំណត់រៀបចំ</div></div>
+  <div class="smey-nav-item"><div class="smey-nav-icon">⚙</div><div>សេវាកម្ម</div></div>
+</div>
+""", unsafe_allow_html=True)
+
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
