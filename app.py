@@ -1075,6 +1075,86 @@ def voxcpm_remote_clone_segment(text, reference_wav, reference_text, output_wav,
     return output_wav
 
 
+
+# ============================================================
+# REMOTE LIP SYNC — Wav2Lip via Hugging Face
+# ============================================================
+@st.cache_resource(show_spinner=False)
+def get_lipsync_client():
+    try:
+        from gradio_client import Client
+    except ImportError as exc:
+        raise RuntimeError('ត្រូវការ gradio_client សម្រាប់ Lip Sync') from exc
+    return Client('manavisrani07/gradio-lipsync-wav2lip')
+
+
+def _normalize_remote_video_result(result, output_path):
+    import urllib.request
+    value = result
+    if isinstance(value, dict):
+        value = value.get('path') or value.get('url') or value.get('value')
+    if hasattr(value, 'path'):
+        value = value.path
+    if isinstance(value, tuple) and value:
+        value = value[0]
+        if hasattr(value, 'path'):
+            value = value.path
+    if isinstance(value, str):
+        if value.startswith(('http://', 'https://')):
+            urllib.request.urlretrieve(value, output_path)
+        elif os.path.isfile(value):
+            shutil.copyfile(value, output_path)
+        else:
+            raise RuntimeError('Lip Sync មិនបានបញ្ជូនវីដេអូត្រឡប់មកវិញ')
+    else:
+        raise RuntimeError(f'Lip Sync result មិនស្គាល់ប្រភេទ: {type(result).__name__}')
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) < 10000:
+        raise RuntimeError('Lip Sync output មិនត្រឹមត្រូវ')
+    return output_path
+
+
+def run_remote_lipsync(video_path, audio_path, output_path):
+    """Run Wav2Lip remotely so Streamlit Cloud does not need the huge model."""
+    from gradio_client import handle_file
+    client = get_lipsync_client()
+    video_file = handle_file(video_path)
+    audio_file = handle_file(audio_path)
+    last_error = None
+
+    # Current public Space exposes a /generate endpoint. Its current event
+    # wiring uses these 8 inputs: video, audio, checkpoint, pad_top,
+    # pad_bottom, pad_left, pad_right, resize_factor.
+    attempts = [
+        ('/generate', [video_file, audio_file, 'wav2lip_gan', 0, 10, 0, 0, 1]),
+        ('/generate', [video_file, audio_file, 'wav2lip', 0, 10, 0, 0, 1]),
+    ]
+    for api_name, args in attempts:
+        try:
+            result = client.predict(*args, api_name=api_name)
+            return _normalize_remote_video_result(result, output_path)
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError('Remote Lip Sync មិនអាចដំណើរការ: ' + str(last_error))
+
+
+def mix_lipsync_with_background(lipsync_video, original_video, dubbing_audio, output_path):
+    """Keep the lip-synced video while restoring the original background bed."""
+    temp_dir = os.path.dirname(output_path)
+    music_audio = os.path.join(temp_dir, 'lipsync_background.wav')
+    extract_music_without_dialogue(original_video, music_audio)
+    cmd = [
+        ffmpeg(), '-y', '-i', lipsync_video, '-i', music_audio, '-i', dubbing_audio,
+        '-filter_complex',
+        '[1:a]volume=0.75[music];[2:a]volume=1.25[dub];'
+        '[music][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]',
+        '-map', '0:v:0', '-map', '[aout]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+        '-shortest', '-movflags', '+faststart', output_path
+    ]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        raise RuntimeError('បញ្ចូល Lip Sync + Background Music មិនបាន:\n' + r.stderr.decode('utf-8', errors='ignore')[-4000:])
+    return output_path
+
 def make_voice_clone_audio(translated_groups, reference_wav, reference_text, temp_dir, total_duration, target_language='Khmer'):
     """Generate one continuous cloned-voice track.
 
@@ -1289,16 +1369,20 @@ with dubbing_slot.container():
                                 gc.collect()
                                 clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total, clone_target)
 
-                                st.write('🎬 4/5 កំពុង Sync + រក្សា Background Music...')
-                                replace_video_audio(input_video, clone_audio, output_video)
-                                status.update(label='✅ Voice Clone Dubbing រួចរាល់!', state='complete')
+                                st.write('👄 4/5 កំពុងធ្វើ AI Lip Sync ឱ្យមាត់តាមសំឡេង...')
+                                lipsync_video = os.path.join(temp_dir, 'Smey_AI_LipSync.mp4')
+                                lipsync_mixed = os.path.join(temp_dir, 'Smey_AI_Voice_Clone_LipSync.mp4')
+                                run_remote_lipsync(input_video, clone_audio, lipsync_video)
+                                mix_lipsync_with_background(lipsync_video, input_video, clone_audio, lipsync_mixed)
+                                shutil.copyfile(lipsync_mixed, output_video)
+                                status.update(label='✅ Voice Clone + Lip Sync រួចរាល់!', state='complete')
 
                             st.subheader('🎬 Result — Voice Clone')
                             st.video(output_video)
                             with open(output_video, 'rb') as f:
                                 clone_data = f.read()
                             st.download_button('📥 Download Voice Clone MP4', clone_data, file_name='Smey_AI_Voice_Clone.mp4', mime='video/mp4', key='download_clone', on_click='ignore')
-                            st.caption('Voice Clone Remote: រក្សាសំឡេងធម្មជាតិ មិនបង្ខំល្បឿនខ្លាំងពេក។')
+                            st.caption('Voice Clone + AI Lip Sync: មាត់តាមសំឡេងខ្មែរ និងរក្សា Background Music។')
                         except Exception as e:
                             st.error(f'❌ Voice Clone មិនអាចបញ្ចប់បាន: {e}')
 
