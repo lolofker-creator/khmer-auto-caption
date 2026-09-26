@@ -19,7 +19,7 @@ st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='c
 
 # ===== OFFICIAL USER LOGO — external PNG, no Base64 =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SMEY_LOGO_PATH = os.path.join(BASE_DIR, 'assets', 'smey_ai_dubbing_logo.png')
+SMEY_LOGO_PATH = os.path.join(BASE_DIR, 'smey_ai_dubbing_logo.png')
 
 # ===== BEAUTIFUL UI v8 — clean guide, no fake top buttons =====
 st.markdown(r"""
