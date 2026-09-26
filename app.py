@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -12,6 +13,8 @@ import asyncio
 from gtts import gTTS
 import asyncio
 import streamlit as st
+from google import genai
+from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
 
@@ -153,11 +156,6 @@ def ass_time(value):
 
 @st.cache_resource
 def get_gemini_client(api_key):
-    # Optional legacy helper; Gemini is not required for the current Dubbing path.
-    try:
-        from google import genai
-    except ImportError as exc:
-        raise RuntimeError('Gemini backend មិនបានដំឡើង — AI Dubbing បច្ចុប្បន្នប្រើ Local Whisper + Free Translation។') from exc
     return genai.Client(api_key=api_key)
 
 def retry_gemini(call, attempts=4, delay=2):
@@ -654,11 +652,28 @@ def burn(video_path, ass_path, output_path):
 
 def extract_audio(video_path, output_wav):
     try:
-        command = [ffmpeg(), '-y', '-i', video_path, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', output_wav]
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode != 0:
-            error = result.stderr.decode('utf-8', errors='ignore')
-            raise RuntimeError(error[-4000:])
+        import av
+        container = av.open(video_path)
+        stream = next((s for s in container.streams if s.type == 'audio'), None)
+        if stream is None:
+            raise RuntimeError('រកមិនឃើញ Audio ក្នុងវីដេអូ')
+        resampler = av.audio.resampler.AudioResampler(format='s16', layout='mono', rate=16000)
+        pcm = bytearray()
+        for frame in container.decode(stream):
+            frames = resampler.resample(frame)
+            if not isinstance(frames, list):
+                frames = [frames]
+            for converted in frames:
+                for plane in converted.planes:
+                    pcm.extend(plane.to_bytes())
+        container.close()
+        if not pcm:
+            raise RuntimeError('Audio ទទេ')
+        with wave.open(output_wav, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(bytes(pcm))
         return output_wav
     except Exception:
         command = [ffmpeg(), '-y', '-i', video_path, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', output_wav]
@@ -888,53 +903,108 @@ def webpage_download(page_url, output_path):
 # VOICE CLONE — VoxCPM2 (additive feature; does not remove AI Dubbing)
 # ============================================================
 @st.cache_resource(show_spinner=False)
-def load_voxcpm2_model():
-    # IMPORTANT: never pip-install VoxCPM inside Streamlit requests.
-    # Its PyTorch/model stack is too heavy for Streamlit Community Cloud and
-    # can kill the whole app process. Voice Clone is therefore optional.
+@st.cache_resource(show_spinner=False)
+def get_voxcpm_client():
+    """Connect to the public Hugging Face VoxCPM-Demo Gradio API.
+
+    The heavy VoxCPM model is NOT installed on Streamlit Cloud. Generation is
+    performed by the official OpenBMB demo Space instead.
+    """
     try:
-        from voxcpm import VoxCPM
-    except Exception as exc:
-        raise RuntimeError(
-            'Voice Clone backend មិនបានដំឡើងនៅលើ Streamlit server នេះទេ។\n\n'
-            'AI Dubbing ធម្មតានៅតែអាចប្រើបាន។\n'
-            'សម្រាប់ Voice Clone សូមប្រើ backend GPU ដាច់ដោយឡែក។'
-        ) from exc
-
-    return VoxCPM.from_pretrained(
-        'openbmb/VoxCPM-0.5B',
-        load_denoiser=False,
-        optimize=False,
-        device='cpu',
-    )
+        from gradio_client import Client
+    except ImportError as exc:
+        raise RuntimeError('ត្រូវការ gradio_client ក្នុង requirements.txt សម្រាប់ Voice Clone') from exc
+    return Client('openbmb/VoxCPM-Demo')
 
 
-def voxcpm2_clone_segment(model, text, reference_wav, output_wav, reference_text):
-    import soundfile as sf
+def _save_voxcpm_result(result, output_wav):
+    """Normalize Gradio audio output (path/URL/tuple/dict) into a local WAV."""
+    import urllib.request
+    import numpy as np
+
+    value = result
+    if isinstance(value, dict):
+        value = value.get('path') or value.get('url') or value.get('value')
+
+    # Some Gradio versions return (sample_rate, numpy_array).
+    if isinstance(value, tuple) and len(value) == 2:
+        sr, data = value
+        try:
+            import soundfile as sf
+            arr = np.asarray(data)
+            sf.write(output_wav, arr, int(sr))
+            return output_wav
+        except Exception as exc:
+            raise RuntimeError(f'VoxCPM audio result មិនអាចសរសេរ WAV: {exc}') from exc
+
+    if hasattr(value, 'path'):
+        value = value.path
+
+    if isinstance(value, str):
+        if value.startswith('http://') or value.startswith('https://'):
+            tmp = output_wav + '.download'
+            urllib.request.urlretrieve(value, tmp)
+            # The official Space currently returns MP3; ffmpeg converts it.
+            result_ff = subprocess.run(
+                [ffmpeg(), '-y', '-i', tmp, '-vn', '-ac', '1', '-ar', '16000', output_wav],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            if result_ff.returncode != 0:
+                raise RuntimeError('VoxCPM remote audio មិនអាចបម្លែងទៅ WAV បាន')
+            return output_wav
+        if os.path.isfile(value):
+            result_ff = subprocess.run(
+                [ffmpeg(), '-y', '-i', value, '-vn', '-ac', '1', '-ar', '16000', output_wav],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            if result_ff.returncode != 0:
+                # It may already be a WAV.
+                shutil.copyfile(value, output_wav)
+            return output_wav
+
+    raise RuntimeError(f'VoxCPM មិនបានបញ្ជូន audio file ត្រឡប់មកវិញ: {type(result).__name__}')
+
+
+def voxcpm_remote_clone_segment(text, reference_wav, reference_text, output_wav, control_instruction=''):
+    """Generate one cloned-voice segment through the official VoxCPM-Demo API."""
     text = re.sub(r'\s+', ' ', str(text or '')).strip()
     if not text:
         raise ValueError('អត្ថបទសម្រាប់ Voice Clone ទទេ')
-    wav = model.generate(
-        text=text,
-        prompt_wav_path=reference_wav,
-        prompt_text=reference_text,
-        cfg_value=2.0,
-        inference_timesteps=6,
-        normalize=True,
-        denoise=False,
+
+    if not os.path.isfile(reference_wav):
+        raise RuntimeError('Voice Reference file មិនមាន')
+
+    # Current OpenBMB VoxCPM-Demo exposes the Gradio endpoint /generate with
+    # these 8 inputs: text, control, reference audio, prompt-text toggle,
+    # prompt text, CFG, normalize, and reference denoise.
+    client = get_voxcpm_client()
+    use_prompt_text = bool((reference_text or '').strip())
+    result = client.predict(
+        text,
+        (control_instruction or '').strip(),
+        reference_wav,
+        use_prompt_text,
+        (reference_text or '').strip() if use_prompt_text else '',
+        2.0,
+        True,
+        False,
+        api_name='/generate',
     )
-    sf.write(output_wav, wav, model.tts_model.sample_rate)
+    _save_voxcpm_result(result, output_wav)
     if not os.path.isfile(output_wav) or os.path.getsize(output_wav) < 1000:
-        raise RuntimeError('VoxCPM2 មិនបានបង្កើតសំឡេង')
+        raise RuntimeError('VoxCPM remote មិនបានបង្កើតសំឡេង')
     return output_wav
 
 
 def make_voice_clone_audio(translated_groups, reference_wav, reference_text, temp_dir, total_duration):
-    """Generate cloned-voice segments and place them on the original timeline."""
-    clone_model = load_voxcpm2_model()
+    """Generate cloned-voice segments remotely and place them on the original timeline."""
     timeline = os.path.join(temp_dir, 'voice_clone_timeline.wav')
     segment_files = []
-    normalized_groups = []
+
     for i, item in enumerate(translated_groups):
         text = str(item.get('text', '')).strip()
         if not text:
@@ -945,16 +1015,14 @@ def make_voice_clone_audio(translated_groups, reference_wav, reference_text, tem
             end = start + 0.8
         raw = os.path.join(temp_dir, f'clone_raw_{i:04d}.wav')
         fitted = os.path.join(temp_dir, f'clone_fit_{i:04d}.wav')
-        voxcpm2_clone_segment(clone_model, text, reference_wav, raw, reference_text)
+        voxcpm_remote_clone_segment(text, reference_wav, reference_text, raw)
         fit_audio_to_duration(raw, fitted, end - start)
         segment_files.append((fitted, start, end))
-        normalized_groups.append({'text': text, 'start': start, 'end': end})
 
     if not segment_files:
         raise RuntimeError('មិនមានអត្ថបទសម្រាប់ Voice Clone')
 
-    # Build a silent timeline, then mix each cloned segment at its original timing.
-    command = [ffmpeg(), '-y', '-f', 'lavfi', '-i', f'anullsrc=r=16000:cl=mono', '-t', str(max(0.2, total_duration)), '-c:a', 'pcm_s16le', timeline]
+    command = [ffmpeg(), '-y', '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', str(max(0.2, total_duration)), '-c:a', 'pcm_s16le', timeline]
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
         raise RuntimeError('មិនអាចបង្កើត Voice Clone timeline')
@@ -1034,8 +1102,6 @@ with dubbing_slot.container():
 
         else:
                     st.info('🎙️ Voice Clone គឺជាមុខងារ Dubbing មួយទៀត។ Upload Voice Reference → Clone Voice → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។')
-                    st.caption('⚠️ Voice Clone backend មិនត្រូវបានដំឡើងលើ Streamlit server ដើម្បីការពារ App ពីការដួល។ AI Dubbing ធម្មតាមិនរងផលប៉ះពាល់ទេ។')
-                    st.markdown('🎙️ **Voice Clone GPU Demo:** [OpenBMB VoxCPM Demo](https://huggingface.co/spaces/openbmb/VoxCPM-Demo)')
                     clone_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='clone_source')
                     clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
                     clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
@@ -1082,9 +1148,11 @@ with dubbing_slot.container():
                                 st.write('🔄 2/5 កំពុងបកប្រែដោយ Free Translation...')
                                 translated = translate_groups(None, groups, clone_target, clone_source)
 
-                                st.write('🎙️ 3/5 កំពុង Clone សំឡេងដោយ VoxCPM2...')
+                                st.write('🎙️ 3/5 កំពុង Clone សំឡេងតាម VoxCPM2 Remote (Hugging Face)...')
                                 total = max((x['end'] for x in groups), default=audio_duration(source_audio))
-                                # VoxCPM-0.5B needs transcript text for prompt-based voice cloning.
+                                # VoxCPM-Demo supports prompt-based cloning with reference audio + transcript.
+                                # Reference audio is limited to 50 seconds by the official Space,
+                                # so keep the upload safely below that limit.
                                 reference_text = (clone_text_hint or '').strip()
                                 if not reference_text:
                                     st.write('📝 កំពុងស្គាល់អត្ថបទក្នុង Voice Reference ដោយ Local Whisper...')
