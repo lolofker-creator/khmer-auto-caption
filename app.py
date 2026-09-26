@@ -1075,70 +1075,83 @@ def voxcpm_remote_clone_segment(text, reference_wav, reference_text, output_wav,
     return output_wav
 
 
-def make_voice_clone_audio(translated_groups, reference_wav, reference_text, temp_dir, total_duration):
-    """Generate cloned-voice segments remotely and place them on the original timeline."""
-    timeline = os.path.join(temp_dir, 'voice_clone_timeline.wav')
-    segment_files = []
+def make_voice_clone_audio(translated_groups, reference_wav, reference_text, temp_dir, total_duration, target_language='Khmer'):
+    """Generate one continuous cloned-voice track.
 
-    for i, item in enumerate(translated_groups):
-        text = str(item.get('text', '')).strip()
-        if not text:
-            continue
-        start = float(item.get('start', 0.0))
-        end = float(item.get('end', start + 0.8))
-        if end <= start:
-            end = start + 0.8
-        raw = os.path.join(temp_dir, f'clone_raw_{i:04d}.wav')
-        fitted = os.path.join(temp_dir, f'clone_fit_{i:04d}.wav')
-        voxcpm_remote_clone_segment(text, reference_wav, reference_text, raw)
-        # Do NOT aggressively squeeze every cloned sentence into the original
-        # subtitle duration. That makes VoxCPM speech sound warped/garbled.
-        # Keep clone speech close to natural speed; only use gentle time-stretch.
-        actual = audio_duration(raw)
-        target = max(0.6, end - start)
-        ratio = actual / target if actual > 0 else 1.0
-        if ratio > 1.25:
-            # Cap speed-up at 25%; preserve intelligibility instead of forcing
-            # very short Chinese/Khmer segments to play unnaturally fast.
-            af = 'atempo=1.25'
-        elif ratio < 0.80:
-            af = 'atempo=0.80'
-        else:
-            af = f'atempo={ratio:.6f}'
-        cmd_fit = [ffmpeg(), '-y', '-i', raw, '-af', af, '-ac', '1', '-ar', '24000', fitted]
-        rr = subprocess.run(cmd_fit, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if rr.returncode != 0:
-            raise RuntimeError('Voice Clone audio fitting failed: ' + rr.stderr.decode('utf-8', errors='ignore')[-2000:])
-        # Use the real generated duration when it is longer than the subtitle
-        # slot; do not cut the cloned words in half.
-        generated_end = start + audio_duration(fitted)
-        segment_files.append((fitted, start, max(end, generated_end)))
-
-    if not segment_files:
+    The previous version generated a separate VoxCPM clip for every tiny
+    subtitle segment. That can make multilingual cloning sound broken or
+    garbled. Generate the translated target-language script as one coherent
+    utterance instead, then gently fit it to the video duration.
+    """
+    if not translated_groups:
         raise RuntimeError('មិនមានអត្ថបទសម្រាប់ Voice Clone')
 
-    command = [ffmpeg(), '-y', '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', str(max(0.2, total_duration)), '-c:a', 'pcm_s16le', timeline]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        raise RuntimeError('មិនអាចបង្កើត Voice Clone timeline')
+    target_text = ' '.join(
+        re.sub(r'\s+', ' ', str(x.get('text', '') or '')).strip()
+        for x in translated_groups
+        if str(x.get('text', '') or '').strip()
+    ).strip()
+    if not target_text:
+        raise RuntimeError('អត្ថបទ Voice Clone ទទេ')
 
-    inputs = ['-i', timeline]
-    for path, _, _ in segment_files:
-        inputs += ['-i', path]
-    filters = []
-    labels = []
-    for idx, (_, start, end) in enumerate(segment_files, start=1):
-        label = f'a{idx}'
-        filters.append(f'[{idx}:a]adelay={int(start*1000)}:all=1[{label}]')
-        labels.append(f'[{label}]')
-    filters.append('[0:a]' + ''.join(labels) + f'amix=inputs={len(labels)+1}:duration=longest:normalize=0[vo]')
-    mixed = os.path.join(temp_dir, 'voice_clone_mixed.wav')
-    command = [ffmpeg(), '-y'] + inputs + ['-filter_complex', ';'.join(filters), '-map', '[vo]', '-t', str(max(0.2, total_duration)), '-ar', '24000', '-ac', '1', mixed]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        err = result.stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError('Voice Clone timeline mix failed:\n' + err[-2500:])
-    return mixed
+    if target_language == 'Khmer' and not re.search(r'[\u1780-\u17FF]', target_text):
+        raise RuntimeError('Voice Clone មិនទទួលបានអត្ថបទខ្មែរ។ មិនអនុញ្ញាតឱ្យបង្កើតសំឡេងពីអត្ថបទដើមទេ។')
+
+    raw = os.path.join(temp_dir, 'voice_clone_full_raw.wav')
+    fitted = os.path.join(temp_dir, 'voice_clone_full.wav')
+
+    # Explicitly tell VoxCPM the TARGET language. The reference transcript is
+    # kept in the reference speaker's language; it is not the target script.
+    if target_language == 'Khmer':
+        control = 'Speak clearly and naturally in Khmer (ភាសាខ្មែរ). Use correct Khmer pronunciation. Do not speak Chinese or read the reference transcript. Keep a natural human pace and clear words.'
+    elif target_language == 'Chinese':
+        control = 'Speak clearly and naturally in Mandarin Chinese. Do not speak Khmer. Keep a natural human pace and clear words.'
+    else:
+        control = 'Speak clearly and naturally in English. Do not speak the reference language. Keep a natural human pace and clear words.'
+
+    voxcpm_remote_clone_segment(
+        target_text,
+        reference_wav,
+        reference_text,
+        raw,
+        control_instruction=control,
+    )
+
+    actual = audio_duration(raw)
+    if actual <= 0:
+        raise RuntimeError('VoxCPM បានបង្កើតសំឡេងទទេ')
+
+    # Prefer intelligibility. Only compress when the generated track is much
+    # longer than the video; never force extreme speed changes.
+    target = max(0.5, float(total_duration))
+    ratio = actual / target
+    if ratio > 1.20:
+        # At most 20% faster per filter stage. atempo supports this directly.
+        af = 'atempo=1.20'
+    elif ratio < 0.85:
+        # Slow down only modestly; otherwise keep the natural generated pace.
+        af = 'atempo=0.85'
+    else:
+        af = 'anull'
+
+    cmd = [ffmpeg(), '-y', '-i', raw, '-af', af, '-ac', '1', '-ar', '24000', fitted]
+    rr = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if rr.returncode != 0:
+        raise RuntimeError('Voice Clone audio fitting failed: ' + rr.stderr.decode('utf-8', errors='ignore')[-2500:])
+
+    # If the audio remains longer than the source video, trim only the tail;
+    # do not cut individual words or create per-word fragments.
+    final_duration = audio_duration(fitted)
+    if final_duration > target + 0.05:
+        trimmed = os.path.join(temp_dir, 'voice_clone_final.wav')
+        rr = subprocess.run(
+            [ffmpeg(), '-y', '-i', fitted, '-t', str(target), '-ac', '1', '-ar', '24000', trimmed],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if rr.returncode != 0:
+            raise RuntimeError('Voice Clone final trim failed')
+        return trimmed
+    return fitted
 
 with dubbing_slot.container():
     st.markdown('<div class="smey-dubbing-top">', unsafe_allow_html=True)
@@ -1274,7 +1287,7 @@ with dubbing_slot.container():
                                     raise RuntimeError('មិនអាចស្គាល់ Voice Reference Text ដោយស្វ័យប្រវត្តិ។ សូមប្រើសំឡេងមនុស្សនិយាយច្បាស់ 5–15 វិនាទី (គ្មានភ្លេង/សំឡេងរំខាន) ឬបញ្ចូល Voice Reference Text ដោយដៃ។')
                                 import gc
                                 gc.collect()
-                                clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total)
+                                clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total, clone_target)
 
                                 st.write('🎬 4/5 កំពុង Sync + រក្សា Background Music...')
                                 replace_video_audio(input_video, clone_audio, output_video)
