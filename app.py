@@ -1,5 +1,4 @@
 import os
-import sys
 import re
 import subprocess
 import tempfile
@@ -13,8 +12,6 @@ import asyncio
 from gtts import gTTS
 import asyncio
 import streamlit as st
-from google import genai
-from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
 
@@ -156,6 +153,11 @@ def ass_time(value):
 
 @st.cache_resource
 def get_gemini_client(api_key):
+    # Optional legacy helper; Gemini is not required for the current Dubbing path.
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError('Gemini backend មិនបានដំឡើង — AI Dubbing បច្ចុប្បន្នប្រើ Local Whisper + Free Translation។') from exc
     return genai.Client(api_key=api_key)
 
 def retry_gemini(call, attempts=4, delay=2):
@@ -652,28 +654,11 @@ def burn(video_path, ass_path, output_path):
 
 def extract_audio(video_path, output_wav):
     try:
-        import av
-        container = av.open(video_path)
-        stream = next((s for s in container.streams if s.type == 'audio'), None)
-        if stream is None:
-            raise RuntimeError('រកមិនឃើញ Audio ក្នុងវីដេអូ')
-        resampler = av.audio.resampler.AudioResampler(format='s16', layout='mono', rate=16000)
-        pcm = bytearray()
-        for frame in container.decode(stream):
-            frames = resampler.resample(frame)
-            if not isinstance(frames, list):
-                frames = [frames]
-            for converted in frames:
-                for plane in converted.planes:
-                    pcm.extend(plane.to_bytes())
-        container.close()
-        if not pcm:
-            raise RuntimeError('Audio ទទេ')
-        with wave.open(output_wav, 'wb') as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(16000)
-            wav.writeframes(bytes(pcm))
+        command = [ffmpeg(), '-y', '-i', video_path, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', output_wav]
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            error = result.stderr.decode('utf-8', errors='ignore')
+            raise RuntimeError(error[-4000:])
         return output_wav
     except Exception:
         command = [ffmpeg(), '-y', '-i', video_path, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', output_wav]
@@ -904,30 +889,17 @@ def webpage_download(page_url, output_path):
 # ============================================================
 @st.cache_resource(show_spinner=False)
 def load_voxcpm2_model():
-    # Keep VoxCPM OUT of requirements.txt so Streamlit can start normally.
-    # Install/load it only when the user explicitly chooses Voice Clone.
+    # IMPORTANT: never pip-install VoxCPM inside Streamlit requests.
+    # Its PyTorch/model stack is too heavy for Streamlit Community Cloud and
+    # can kill the whole app process. Voice Clone is therefore optional.
     try:
         from voxcpm import VoxCPM
-    except Exception:
-        st.info('📦 កំពុងរៀបចំ Voice Clone backend... ការប្រើលើកដំបូងអាចចំណាយពេលបន្តិច។')
-        try:
-            result = subprocess.run(
-                [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'voxcpm==2.0.3'],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=900,
-            )
-            from voxcpm import VoxCPM
-        except Exception as exc:
-            detail = str(exc)
-            if getattr(exc, 'stderr', None):
-                detail = exc.stderr[-1800:]
-            raise RuntimeError(
-                'Voice Clone backend មិនអាចដំឡើងបានលើ server នេះ។\n\n'
-                'AI Dubbing ធម្មតានៅតែអាចប្រើបាន។\n\n' + detail
-            ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            'Voice Clone backend មិនបានដំឡើងនៅលើ Streamlit server នេះទេ។\n\n'
+            'AI Dubbing ធម្មតានៅតែអាចប្រើបាន។\n'
+            'សម្រាប់ Voice Clone សូមប្រើ backend GPU ដាច់ដោយឡែក។'
+        ) from exc
 
     return VoxCPM.from_pretrained(
         'openbmb/VoxCPM-0.5B',
@@ -1062,6 +1034,8 @@ with dubbing_slot.container():
 
         else:
                     st.info('🎙️ Voice Clone គឺជាមុខងារ Dubbing មួយទៀត។ Upload Voice Reference → Clone Voice → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។')
+                    st.caption('⚠️ Voice Clone backend មិនត្រូវបានដំឡើងលើ Streamlit server ដើម្បីការពារ App ពីការដួល។ AI Dubbing ធម្មតាមិនរងផលប៉ះពាល់ទេ។')
+                    st.markdown('🎙️ **Voice Clone GPU Demo:** [OpenBMB VoxCPM Demo](https://huggingface.co/spaces/openbmb/VoxCPM-Demo)')
                     clone_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='clone_source')
                     clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
                     clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
