@@ -6,5 +6,5 @@ av
 yt-dlp
 gTTS
 edge-tts
-voxcpm
+voxcpm==2.0.3
 soundfile
