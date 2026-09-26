@@ -34,6 +34,8 @@ st.markdown(r"""
 .smey-sub{font-size:14px;color:#e8edf6;line-height:1.7;margin:15px auto 18px;max-width:690px}
 .smey-flow{color:#f1f4f8;font-weight:650}.smey-flow .arrow{color:#62cfff;padding:0 3px}
 .smey-features{margin:8px 0 22px;padding:2px 4px 0}
+.smey-guide{border:1px solid rgba(255,255,255,.10);border-radius:18px;padding:15px 16px;margin:4px 0 18px;background:linear-gradient(145deg,rgba(255,68,55,.13),rgba(255,255,255,.035));box-shadow:0 12px 30px rgba(0,0,0,.20)}
+.smey-guide-title{font-size:18px;font-weight:900;margin-bottom:6px;color:#f7f8fb}.smey-guide-sub{font-size:12px;color:#bfc8d6;line-height:1.55;margin-bottom:8px}.smey-step{display:flex;gap:9px;align-items:flex-start;padding:6px 0;font-size:12.5px;line-height:1.55;color:#eef1f6}.smey-num{min-width:23px;height:23px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,74,55,.20);border:1px solid rgba(255,100,80,.30);font-weight:900;color:#fff}.smey-step b{color:#5bcfff}
 .smey-feature{display:flex;align-items:center;gap:14px;padding:8px 0;color:#f3f5f9;font-size:15px;line-height:1.45}
 .smey-icon{width:42px;height:42px;min-width:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:23px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);box-shadow:0 7px 20px rgba(0,0,0,.18)}
 .smey-icon.mic{color:#18e5dd}.smey-icon.cap{color:#55bfff}.smey-icon.voice{color:#ff5366}.smey-icon.img{color:#d46cff}.smey-icon.down{color:#2ee9aa}
@@ -51,7 +53,7 @@ st.markdown(r"""
 .stButton>button:hover,.stDownloadButton>button:hover{transform:translateY(-1px);filter:brightness(1.06);box-shadow:0 9px 24px rgba(0,0,0,.24)}
 [data-testid="stStatusWidget"],[data-testid="stAlert"]{border-radius:16px!important}
 [data-testid="stVideo"] video{border-radius:18px;box-shadow:0 14px 35px rgba(0,0,0,.30)}
-@media(max-width:700px){.block-container{padding:8px 12px 28px}.smey-title{font-size:34px}.smey-sub{font-size:12.5px;margin-top:12px}.smey-feature{font-size:13px;gap:10px;padding:7px 0}.smey-icon{width:37px;height:37px;min-width:37px;font-size:20px;border-radius:10px}}
+@media(max-width:700px){.block-container{padding:8px 12px 28px}.smey-title{font-size:34px}.smey-sub{font-size:12.5px;margin-top:12px}.smey-feature{font-size:13px;gap:10px;padding:7px 0}.smey-icon{width:37px;height:37px;min-width:37px;font-size:20px;border-radius:10px}.smey-guide{padding:13px 14px;border-radius:16px}.smey-guide-title{font-size:16px}.smey-guide-sub,.smey-step{font-size:11.5px}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,16 +70,16 @@ else:
 dubbing_slot = st.empty()
 
 st.markdown("""
-<div class="smey-features">
-  <div class="smey-feature"><span class="smey-icon mic">🎙️</span><span>ភាសា: <b>ចិន / អង់គ្លេស / ខ្មែរ</b></span></div>
-  <div class="smey-feature"><span class="smey-icon cap">▤</span><span>បង្កើត <b>Caption ខ្មែរ</b> ដោយស្វ័យប្រវត្តិ</span></div>
-  <div class="smey-feature"><span class="smey-icon voice">🔊</span><span>AI Dubbing (សំឡេងខ្មែរ) + Auto Sync</span></div>
-  <div class="smey-feature"><span class="smey-icon img">🖼️</span><span>AI Image Generation (Hugging Face)</span></div>
-  <div class="smey-feature"><span class="smey-icon down">⬇️</span><span>Direct Video Downloader (MP4/WebM/MOV)</span></div>
+<div class="smey-guide">
+  <div class="smey-guide-title">📖 របៀបប្រើ Smey AI Dubbing</div>
+  <div class="smey-guide-sub">ធ្វើតាម 4 ជំហានខាងក្រោម ដើម្បីបង្កើតវីដេអូ Dubbing និង Caption។</div>
+  <div class="smey-step"><span class="smey-num">1</span><span><b>Upload Video</b> — ជ្រើសវីដេអូដែលអ្នកចង់ធ្វើ Dubbing ឬ Caption។</span></div>
+  <div class="smey-step"><span class="smey-num">2</span><span><b>ជ្រើសភាសា</b> — កំណត់ភាសាសំឡេងដើម និងភាសាដែលចង់បម្លែង។</span></div>
+  <div class="smey-step"><span class="smey-num">3</span><span><b>ជ្រើសសំឡេង</b> — ជ្រើស Neural Voice ដែលអ្នកចង់ប្រើសម្រាប់ Dubbing។</span></div>
+  <div class="smey-step"><span class="smey-num">4</span><span><b>បង្កើត MP4</b> — ប្រព័ន្ធនឹង Transcribe → Translate → Voice → Sync ហើយបង្កើតវីដេអូរួចរាល់។</span></div>
 </div>
 <div class="smey-contact">📩 ទំនាក់ទំនងម្ចាស់កម្មវិធី: <a href="https://t.me/Smeytk">Telegram @Smeytk</a></div>
 <div class="smey-divider"></div>
-<div class="smey-real-controls"><div class="smey-real-title">🎬 ចាប់ផ្ដើមប្រើកម្មវិធី</div><div class="smey-real-sub">មុខងារខាងក្រោមអាចចុច និងប្រើបានពិតៗ។</div></div>
 """, unsafe_allow_html=True)
 
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
