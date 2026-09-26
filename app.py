@@ -17,20 +17,18 @@ from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
 
-# ===== BEAUTIFUL UI v7 — UI ONLY, existing processing/features preserved =====
+# ===== BEAUTIFUL UI v8 — clean guide, no fake top buttons =====
 st.markdown(r"""
 <style>
-.stApp{background:radial-gradient(circle at 90% 0%,rgba(255,74,55,.20),transparent 30%),radial-gradient(circle at 5% 20%,rgba(50,120,255,.12),transparent 28%),linear-gradient(180deg,#0a0d13 0%,#101621 55%,#090c11 100%);color:#f7f8fb}
+.stApp{background:radial-gradient(circle at 90% 0%,rgba(255,74,55,.16),transparent 30%),radial-gradient(circle at 5% 20%,rgba(50,120,255,.10),transparent 28%),linear-gradient(180deg,#0a0d13 0%,#101621 55%,#090c11 100%);color:#f7f8fb}
 [data-testid="stHeader"]{background:transparent}
 #MainMenu,footer{visibility:hidden}
 .block-container{max-width:760px;padding:14px 14px 42px}
-.smey-hero{position:relative;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:26px;padding:23px 21px 20px;margin-bottom:16px;background:linear-gradient(145deg,rgba(255,68,55,.24),rgba(255,155,0,.09) 43%,rgba(30,40,55,.55));box-shadow:0 18px 50px rgba(0,0,0,.34),inset 0 1px rgba(255,255,255,.08)}
-.smey-hero:before{content:"";position:absolute;width:210px;height:210px;right:-80px;top:-105px;border-radius:50%;background:rgba(255,72,55,.18);filter:blur(12px)}
-.smey-logo{font-size:38px;line-height:1;margin-bottom:10px;position:relative}.smey-title{font-size:29px;font-weight:900;letter-spacing:-.7px;position:relative}.smey-sub{font-size:14px;color:#c8ced9;line-height:1.55;margin-top:7px;position:relative}
-.smey-nav{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;position:relative}
-.smey-nav a{display:inline-flex;align-items:center;justify-content:center;padding:9px 12px;border-radius:999px;text-decoration:none!important;color:#f2f4f8!important;background:rgba(255,255,255,.075);border:1px solid rgba(255,255,255,.12);font-size:12px;font-weight:800;box-shadow:inset 0 1px rgba(255,255,255,.04);transition:.15s}
-.smey-nav a:hover{background:rgba(255,255,255,.14);transform:translateY(-1px)}
-.smey-open{display:flex;align-items:center;justify-content:center;margin:14px 0 10px;padding:13px 16px;border-radius:16px;background:linear-gradient(90deg,rgba(255,70,55,.18),rgba(255,255,255,.06));border:1px solid rgba(255,255,255,.11);color:#fff;font-weight:850;text-decoration:none!important}
+.smey-guide{border:1px solid rgba(255,255,255,.10);border-radius:22px;padding:19px 18px;margin:4px 0 18px;background:linear-gradient(145deg,rgba(255,68,55,.15),rgba(255,255,255,.045));box-shadow:0 14px 38px rgba(0,0,0,.25)}
+.smey-guide-title{font-size:20px;font-weight:900;margin-bottom:10px}
+.smey-guide-sub{font-size:13px;color:#cbd2de;line-height:1.6;margin-bottom:12px}
+.smey-step{display:flex;gap:10px;align-items:flex-start;padding:8px 0;font-size:13px;line-height:1.55;color:#eef1f6}
+.smey-num{min-width:25px;height:25px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,74,55,.22);border:1px solid rgba(255,100,80,.35);font-weight:900}
 [data-testid="stExpander"]{border:1px solid rgba(255,255,255,.10)!important;border-radius:19px!important;background:rgba(16,20,28,.86)!important;box-shadow:0 12px 34px rgba(0,0,0,.20);overflow:hidden}
 [data-testid="stExpander"] summary{font-weight:850!important}
 [data-baseweb="select"]>div,.stTextInput input,[data-testid="stFileUploaderDropzone"]{border-radius:14px!important;border-color:rgba(255,255,255,.13)!important;background:rgba(255,255,255,.045)!important}
@@ -39,22 +37,17 @@ st.markdown(r"""
 .stButton>button:hover,.stDownloadButton>button:hover{transform:translateY(-1px);filter:brightness(1.06);box-shadow:0 9px 24px rgba(0,0,0,.24)}
 [data-testid="stStatusWidget"],[data-testid="stAlert"]{border-radius:16px!important}
 [data-testid="stVideo"] video{border-radius:18px;box-shadow:0 14px 35px rgba(0,0,0,.30)}
-@media(max-width:700px){.block-container{padding:9px 10px 30px}.smey-hero{padding:20px 17px;border-radius:22px}.smey-title{font-size:25px}.smey-logo{font-size:34px}.smey-nav{gap:7px}.smey-nav a{font-size:11px;padding:8px 10px}}
+@media(max-width:700px){.block-container{padding:9px 10px 30px}.smey-guide{padding:17px 15px;border-radius:19px}.smey-guide-title{font-size:18px}.smey-step{font-size:12.5px}}
 </style>
 
-<div class="smey-hero">
-  <div class="smey-logo">🇰🇭</div>
-  <div class="smey-title">Smey Auto Caption</div>
-  <div class="smey-sub">AI Dubbing • Khmer Caption • Natural Neural Voice • Auto Sync</div>
-  <div class="smey-nav">
-    <a href="#smey-dubbing">🎙️ Neural Voice</a>
-    <a href="#smey-dubbing">📝 Auto Caption</a>
-    <a href="#smey-dubbing">🌐 Free Translation</a>
-    <a href="#smey-dubbing">🎬 MP4 Output</a>
-  </div>
-  <a class="smey-open" href="#smey-dubbing">🎙️ បើក AI Dubbing →</a>
+<div class="smey-guide">
+  <div class="smey-guide-title">🇰🇭 របៀបប្រើ Smey Auto Caption</div>
+  <div class="smey-guide-sub">ធ្វើតាម 4 ជំហានខាងក្រោម ដើម្បីបង្កើតវីដេអូ Dubbing និង Caption។</div>
+  <div class="smey-step"><span class="smey-num">1</span><span><b>Upload Video</b> — ជ្រើសវីដេអូដែលអ្នកចង់ធ្វើ Dubbing ឬ Caption។</span></div>
+  <div class="smey-step"><span class="smey-num">2</span><span><b>ជ្រើសភាសា</b> — កំណត់ភាសាសំឡេងដើម និងភាសាដែលចង់បម្លែង។</span></div>
+  <div class="smey-step"><span class="smey-num">3</span><span><b>ជ្រើសសំឡេង</b> — ជ្រើស Khmer Neural Voice ប្រុស ឬ ស្រី ហើយចុច <b>បង្កើត Dubbing</b>។</span></div>
+  <div class="smey-step"><span class="smey-num">4</span><span><b>រង់ចាំរួចរាល់</b> — ប្រព័ន្ធនឹង Transcribe → Translate → Voice → Sync ហើយបង្កើត MP4 សម្រាប់ Download។</span></div>
 </div>
-<div id="smey-dubbing"></div>
 """, unsafe_allow_html=True)
 
 st.title('🇰🇭 Smey AI Dubbing')
