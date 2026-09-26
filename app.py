@@ -53,7 +53,7 @@ with st.expander("🎙️ Human Voice — សម្លេងមនុស្ស�
 
     human_video = st.file_uploader(
         "📤 Upload Video",
-        type=["mp4", "mov", "mkv", "webm"],
+        type=["mp3", "wav", "m4a", "aac", "ogg", "flac"]
         key="human_voice_video"
     )
     human_voice = st.file_uploader(
