@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import subprocess
 import tempfile
@@ -903,12 +904,31 @@ def webpage_download(page_url, output_path):
 # ============================================================
 @st.cache_resource(show_spinner=False)
 def load_voxcpm2_model():
+    # Keep VoxCPM OUT of requirements.txt so Streamlit can start normally.
+    # Install/load it only when the user explicitly chooses Voice Clone.
     try:
         from voxcpm import VoxCPM
-    except ImportError as exc:
-        raise RuntimeError('Voice Clone ត្រូវការ package voxcpm ក្នុង requirements.txt') from exc
-    # Use the smaller 0.5B model so the free Streamlit CPU environment can stay usable.
-    # Voice cloning is done with prompt_wav_path + prompt_text.
+    except Exception:
+        st.info('📦 កំពុងរៀបចំ Voice Clone backend... ការប្រើលើកដំបូងអាចចំណាយពេលបន្តិច។')
+        try:
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'voxcpm==2.0.3'],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=900,
+            )
+            from voxcpm import VoxCPM
+        except Exception as exc:
+            detail = str(exc)
+            if getattr(exc, 'stderr', None):
+                detail = exc.stderr[-1800:]
+            raise RuntimeError(
+                'Voice Clone backend មិនអាចដំឡើងបានលើ server នេះ។\n\n'
+                'AI Dubbing ធម្មតានៅតែអាចប្រើបាន។\n\n' + detail
+            ) from exc
+
     return VoxCPM.from_pretrained(
         'openbmb/VoxCPM-0.5B',
         load_denoiser=False,
