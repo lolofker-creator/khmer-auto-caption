@@ -949,141 +949,146 @@ def make_voice_clone_audio(translated_groups, reference_wav, reference_text, tem
 
 with dubbing_slot.container():
     st.markdown('<div class="smey-dubbing-top">', unsafe_allow_html=True)
-    with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing', expanded=True):
-        st.caption('🎙️ Human-like Neural Voice — សំឡេងទន់ ធម្មជាតិ និងកុំឱ្យលឿន/យឺតខ្លាំងពេក។')
-        dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
-        dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
-        voice_options = {
-            'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
-            'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
-            'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
-        }
-        voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
-        dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
-        if dub_video:
-            st.video(dub_video)
-        if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
-            if not dub_video:
-                st.warning('សូម Upload Video ជាមុន')
-                st.stop()
-            temp_dir=tempfile.mkdtemp()
-            input_video=os.path.join(temp_dir,'dub_input.mp4')
-            audio_path=os.path.join(temp_dir,'dub_source.wav')
-            output_video=os.path.join(temp_dir,'Smey_AI_Dubbing.mp4')
-            try:
-                with open(input_video,'wb') as f: f.write(dub_video.getbuffer())
-                with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
-                    st.write('🎧 1/4 កំពុងស្តាប់សំឡេង និង Word Timing ដោយ Local Whisper (មិនប្រើ Gemini quota)...')
-                    extract_audio(input_video,audio_path)
-                    words=transcribe_local(audio_path,dub_source if dub_source!='Auto' else None)
-                    if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
-                    groups=make_groups(words)
-                    st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
-                    translated=translate_groups(None,groups,dub_target,dub_source)
-                    st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
-                    total=max((x['end'] for x in groups), default=audio_duration(audio_path))
-                    voice=voice_options[dub_target][voice_label]
-                    dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
-                    st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
-                    replace_video_audio(input_video,dub_audio,output_video)
-                    status.update(label='✅ Dubbing រួចរាល់!',state='complete')
-                st.subheader('🎬 Result Dubbing')
-                st.video(output_video)
-                with open(output_video,'rb') as f:
-                    dubbing_data = f.read()
-                st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
-                st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
-            except Exception as e:
-                st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
+    with st.expander('🎙️ Dubbing — AI Dubbing + Voice Clone', expanded=True):
+        st.caption('🎙️ AI Dubbing មួយកន្លែង — ជ្រើស Dubbing ធម្មតា ឬ Voice Clone។')
+        dub_mode = st.radio('🎙️ របៀប Dubbing', ['AI Dubbing ធម្មតា', 'Voice Clone'], horizontal=True, key='dub_mode')
+
+        if dub_mode == 'AI Dubbing ធម្មតា':
+                    st.caption('🎙️ Human-like Neural Voice — សំឡេងទន់ ធម្មជាតិ និងកុំឱ្យលឿន/យឺតខ្លាំងពេក។')
+                    dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
+                    dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
+                    voice_options = {
+                        'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
+                        'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
+                        'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
+                    }
+                    voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
+                    dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
+                    if dub_video:
+                        st.video(dub_video)
+                    if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
+                        if not dub_video:
+                            st.warning('សូម Upload Video ជាមុន')
+                            st.stop()
+                        temp_dir=tempfile.mkdtemp()
+                        input_video=os.path.join(temp_dir,'dub_input.mp4')
+                        audio_path=os.path.join(temp_dir,'dub_source.wav')
+                        output_video=os.path.join(temp_dir,'Smey_AI_Dubbing.mp4')
+                        try:
+                            with open(input_video,'wb') as f: f.write(dub_video.getbuffer())
+                            with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
+                                st.write('🎧 1/4 កំពុងស្តាប់សំឡេង និង Word Timing ដោយ Local Whisper (មិនប្រើ Gemini quota)...')
+                                extract_audio(input_video,audio_path)
+                                words=transcribe_local(audio_path,dub_source if dub_source!='Auto' else None)
+                                if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
+                                groups=make_groups(words)
+                                st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
+                                translated=translate_groups(None,groups,dub_target,dub_source)
+                                st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
+                                total=max((x['end'] for x in groups), default=audio_duration(audio_path))
+                                voice=voice_options[dub_target][voice_label]
+                                dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
+                                st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
+                                replace_video_audio(input_video,dub_audio,output_video)
+                                status.update(label='✅ Dubbing រួចរាល់!',state='complete')
+                            st.subheader('🎬 Result Dubbing')
+                            st.video(output_video)
+                            with open(output_video,'rb') as f:
+                                dubbing_data = f.read()
+                            st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
+                            st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
+                        except Exception as e:
+                            st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
 
 
-    with st.expander('🎙️ Voice Clone — Clone សំឡេងពិតពី Voice Reference', expanded=False):
-        st.info('🎙️ Upload សម្លេង Reference 5–15 វិនាទី → Voice Clone → និយាយអត្ថបទ Dubbing → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។\n\n⚠️ Free/CPU mode ប្រើ VoxCPM-0.5B ដើម្បីកុំឱ្យ Streamlit crash។ វាជាម៉ូដែលស្រាលជាង ប៉ុន្តែភាសាដែលបានបញ្ជាក់ជាផ្លូវការគឺ English/Chinese.')
-        clone_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='clone_source')
-        clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
-        clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
-        clone_reference = st.file_uploader('🎤 Upload Voice Reference', type=['wav','mp3','m4a','aac','ogg','flac'], key='clone_reference')
-        clone_text_hint = st.text_input('📝 Voice Reference Text (Optional)', key='clone_text_hint', placeholder='ទុកទំនេរបាន — App នឹងស្តាប់ Voice Reference ដោយ Whisper ដោយស្វ័យប្រវត្តិ')
-        if clone_video:
-            st.video(clone_video)
-        if clone_reference:
-            st.audio(clone_reference)
 
-        if st.button('🎙️ Clone Voice + បង្កើត Dubbing', type='primary', key='clone_button'):
-            if not clone_video:
-                st.warning('សូម Upload Video ជាមុន')
-                st.stop()
-            if not clone_reference:
-                st.warning('សូម Upload Voice Reference ជាមុន')
-                st.stop()
+        else:
+                    st.info('🎙️ Voice Clone គឺជាមុខងារ Dubbing មួយទៀត។ Upload Voice Reference → Clone Voice → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។')
+                    clone_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='clone_source')
+                    clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
+                    clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
+                    clone_reference = st.file_uploader('🎤 Upload Voice Reference', type=['wav','mp3','m4a','aac','ogg','flac'], key='clone_reference')
+                    clone_text_hint = st.text_input('📝 Voice Reference Text (Optional)', key='clone_text_hint', placeholder='ទុកទំនេរបាន — App នឹងស្តាប់ Voice Reference ដោយ Whisper ដោយស្វ័យប្រវត្តិ')
+                    if clone_video:
+                        st.video(clone_video)
+                    if clone_reference:
+                        st.audio(clone_reference)
 
-            temp_dir = tempfile.mkdtemp()
-            input_video = os.path.join(temp_dir, 'clone_input.mp4')
-            source_audio = os.path.join(temp_dir, 'clone_source.wav')
-            reference_audio = os.path.join(temp_dir, 'clone_reference.wav')
-            output_video = os.path.join(temp_dir, 'Smey_AI_Voice_Clone.mp4')
-            try:
-                with open(input_video, 'wb') as f:
-                    f.write(clone_video.getbuffer())
-                with open(os.path.join(temp_dir, 'reference_upload'), 'wb') as f:
-                    f.write(clone_reference.getbuffer())
-                uploaded_reference = os.path.join(temp_dir, 'reference_upload')
+                    if st.button('🎙️ Clone Voice + បង្កើត Dubbing', type='primary', key='clone_button'):
+                        if not clone_video:
+                            st.warning('សូម Upload Video ជាមុន')
+                            st.stop()
+                        if not clone_reference:
+                            st.warning('សូម Upload Voice Reference ជាមុន')
+                            st.stop()
 
-                # Normalize reference audio to WAV for VoxCPM2.
-                result = subprocess.run([ffmpeg(), '-y', '-i', uploaded_reference, '-vn', '-ac', '1', '-ar', '16000', reference_audio], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if result.returncode != 0:
-                    raise RuntimeError('Voice Reference audio មិនអាចបម្លែងទៅ WAV បាន')
+                        temp_dir = tempfile.mkdtemp()
+                        input_video = os.path.join(temp_dir, 'clone_input.mp4')
+                        source_audio = os.path.join(temp_dir, 'clone_source.wav')
+                        reference_audio = os.path.join(temp_dir, 'clone_reference.wav')
+                        output_video = os.path.join(temp_dir, 'Smey_AI_Voice_Clone.mp4')
+                        try:
+                            with open(input_video, 'wb') as f:
+                                f.write(clone_video.getbuffer())
+                            with open(os.path.join(temp_dir, 'reference_upload'), 'wb') as f:
+                                f.write(clone_reference.getbuffer())
+                            uploaded_reference = os.path.join(temp_dir, 'reference_upload')
 
-                with st.status('កំពុង Clone Voice + Dubbing...', expanded=True) as status:
-                    st.write('🎧 1/5 កំពុងស្តាប់សំឡេងដោយ Local Whisper...')
-                    extract_audio(input_video, source_audio)
-                    words = transcribe_local(source_audio, clone_source if clone_source != 'Auto' else None)
-                    if not words:
-                        raise RuntimeError('រកមិនឃើញ Word Timing')
-                    groups = make_groups(words)
+                            # Normalize reference audio to WAV for VoxCPM2.
+                            result = subprocess.run([ffmpeg(), '-y', '-i', uploaded_reference, '-vn', '-ac', '1', '-ar', '16000', reference_audio], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            if result.returncode != 0:
+                                raise RuntimeError('Voice Reference audio មិនអាចបម្លែងទៅ WAV បាន')
 
-                    st.write('🔄 2/5 កំពុងបកប្រែដោយ Free Translation...')
-                    translated = translate_groups(None, groups, clone_target, clone_source)
+                            with st.status('កំពុង Clone Voice + Dubbing...', expanded=True) as status:
+                                st.write('🎧 1/5 កំពុងស្តាប់សំឡេងដោយ Local Whisper...')
+                                extract_audio(input_video, source_audio)
+                                words = transcribe_local(source_audio, clone_source if clone_source != 'Auto' else None)
+                                if not words:
+                                    raise RuntimeError('រកមិនឃើញ Word Timing')
+                                groups = make_groups(words)
 
-                    st.write('🎙️ 3/5 កំពុង Clone សំឡេងដោយ VoxCPM2...')
-                    total = max((x['end'] for x in groups), default=audio_duration(source_audio))
-                    # VoxCPM-0.5B needs transcript text for prompt-based voice cloning.
-                    reference_text = (clone_text_hint or '').strip()
-                    if not reference_text:
-                        st.write('📝 កំពុងស្គាល់អត្ថបទក្នុង Voice Reference ដោយ Local Whisper...')
-                        # Try the selected language first, then Auto, so the user does not
-                        # have to type the reference transcript manually.
-                        ref_attempts = []
-                        if clone_source != 'Auto':
-                            ref_attempts.append(clone_source)
-                        ref_attempts.append('Auto')
-                        for ref_lang in ref_attempts:
-                            try:
-                                ref_words = transcribe_local(reference_audio, None if ref_lang == 'Auto' else ref_lang)
-                                candidate = ' '.join(w.get('text', '') for w in ref_words).strip()
-                                if candidate:
-                                    reference_text = candidate
-                                    break
-                            except Exception:
-                                pass
-                    if reference_text:
-                        st.caption(f'📝 Voice Reference Text: {reference_text}')
-                    else:
-                        raise RuntimeError('Whisper មិនអាចស្គាល់អត្ថបទក្នុង Voice Reference បាន។ សូមប្រើសំឡេងច្បាស់ 5–15 វិនាទី ឬបញ្ចូល Voice Reference Text ដោយដៃ។')
-                    import gc
-                    gc.collect()
-                    clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total)
+                                st.write('🔄 2/5 កំពុងបកប្រែដោយ Free Translation...')
+                                translated = translate_groups(None, groups, clone_target, clone_source)
 
-                    st.write('🎬 4/5 កំពុង Sync + រក្សា Background Music...')
-                    replace_video_audio(input_video, clone_audio, output_video)
-                    status.update(label='✅ Voice Clone Dubbing រួចរាល់!', state='complete')
+                                st.write('🎙️ 3/5 កំពុង Clone សំឡេងដោយ VoxCPM2...')
+                                total = max((x['end'] for x in groups), default=audio_duration(source_audio))
+                                # VoxCPM-0.5B needs transcript text for prompt-based voice cloning.
+                                reference_text = (clone_text_hint or '').strip()
+                                if not reference_text:
+                                    st.write('📝 កំពុងស្គាល់អត្ថបទក្នុង Voice Reference ដោយ Local Whisper...')
+                                    # Try the selected language first, then Auto, so the user does not
+                                    # have to type the reference transcript manually.
+                                    ref_attempts = []
+                                    if clone_source != 'Auto':
+                                        ref_attempts.append(clone_source)
+                                    ref_attempts.append('Auto')
+                                    for ref_lang in ref_attempts:
+                                        try:
+                                            ref_words = transcribe_local(reference_audio, None if ref_lang == 'Auto' else ref_lang)
+                                            candidate = ' '.join(w.get('text', '') for w in ref_words).strip()
+                                            if candidate:
+                                                reference_text = candidate
+                                                break
+                                        except Exception:
+                                            pass
+                                if reference_text:
+                                    st.caption(f'📝 Voice Reference Text: {reference_text}')
+                                else:
+                                    raise RuntimeError('Whisper មិនអាចស្គាល់អត្ថបទក្នុង Voice Reference បាន។ សូមប្រើសំឡេងច្បាស់ 5–15 វិនាទី ឬបញ្ចូល Voice Reference Text ដោយដៃ។')
+                                import gc
+                                gc.collect()
+                                clone_audio = make_voice_clone_audio(translated, reference_audio, reference_text, temp_dir, total)
 
-                st.subheader('🎬 Result — Voice Clone')
-                st.video(output_video)
-                with open(output_video, 'rb') as f:
-                    clone_data = f.read()
-                st.download_button('📥 Download Voice Clone MP4', clone_data, file_name='Smey_AI_Voice_Clone.mp4', mime='video/mp4', key='download_clone', on_click='ignore')
-                st.caption('Voice Clone CPU អាចចំណាយពេលច្រើនជាង Edge TTS ដូច្នេះការបង្កើតអាចយូរជាង AI Dubbing ធម្មតា។')
-            except Exception as e:
-                st.error(f'❌ Voice Clone មិនអាចបញ្ចប់បាន: {e}')
+                                st.write('🎬 4/5 កំពុង Sync + រក្សា Background Music...')
+                                replace_video_audio(input_video, clone_audio, output_video)
+                                status.update(label='✅ Voice Clone Dubbing រួចរាល់!', state='complete')
+
+                            st.subheader('🎬 Result — Voice Clone')
+                            st.video(output_video)
+                            with open(output_video, 'rb') as f:
+                                clone_data = f.read()
+                            st.download_button('📥 Download Voice Clone MP4', clone_data, file_name='Smey_AI_Voice_Clone.mp4', mime='video/mp4', key='download_clone', on_click='ignore')
+                            st.caption('Voice Clone CPU អាចចំណាយពេលច្រើនជាង Edge TTS ដូច្នេះការបង្កើតអាចយូរជាង AI Dubbing ធម្មតា។')
+                        except Exception as e:
+                            st.error(f'❌ Voice Clone មិនអាចបញ្ចប់បាន: {e}')
 
