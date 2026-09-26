@@ -29,7 +29,7 @@ st.markdown(r"""
     color: #f5f7fb;
 }
 [data-testid="stHeader"] { background: rgba(0,0,0,0); }
-.block-container { max-width: 1180px; padding-top: 1.2rem; padding-bottom: 3rem; }
+.block-container { max-width: 980px; padding-top: 1rem; padding-bottom: 3rem; }
 
 /* Hide Streamlit chrome */
 #MainMenu, footer { visibility: hidden; }
@@ -38,8 +38,8 @@ st.markdown(r"""
 .smey-hero {
     position: relative;
     overflow: hidden;
-    padding: 28px 30px 24px;
-    margin: 4px 0 20px;
+    padding: 24px 26px 22px;
+    margin: 2px 0 18px;
     border-radius: 26px;
     border: 1px solid rgba(255,255,255,.10);
     background: linear-gradient(135deg, rgba(255,69,58,.20), rgba(255,166,0,.08) 45%, rgba(255,255,255,.03));
@@ -50,10 +50,22 @@ st.markdown(r"""
     border-radius:50%; background:rgba(255,75,60,.18); filter:blur(8px);
 }
 .smey-logo { font-size: 42px; line-height:1; margin-bottom:8px; }
-.smey-title { font-size: 32px; font-weight: 850; letter-spacing: -.7px; margin:0; }
+.smey-title { font-size: 30px; font-weight: 850; letter-spacing: -.7px; margin:0; }
 .smey-sub { color:#b9c0cc; font-size:15px; margin-top:8px; }
-.smey-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:17px; }
+.smey-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:15px; }
 .smey-pill { padding:7px 11px; border-radius:999px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.09); color:#e8ebf1; font-size:12px; }
+
+
+.smey-section-label {
+    margin: 12px 0 12px;
+    padding: 13px 16px;
+    border-radius: 15px;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.08);
+    color: #eef1f6;
+    font-size: 14px;
+}
+.smey-section-label span { color:#aeb6c3; font-weight:500; }
 
 /* Cards / expanders */
 [data-testid="stExpander"] {
@@ -119,9 +131,8 @@ st.markdown(r"""
   </div>
 </div>
 """, unsafe_allow_html=True)
-st.title('🇰🇭 Smey AI Dubbing')
-st.caption('🎙️ Khmer Neural Natural Voice → Dubbing → Sync Timing')
-st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
+st.markdown('<div class="smey-section-label">🎬 <b>AI Dubbing</b> <span>• សំឡេង + Sync Timing</span></div>', unsafe_allow_html=True)
+
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
