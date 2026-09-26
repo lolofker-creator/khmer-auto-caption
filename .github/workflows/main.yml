@@ -28,6 +28,12 @@ jobs:
           mkdir -p app/src/main/java/khmer/smey/autocaption
           mkdir -p app/src/main/res/values
 
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          EOF
+
           cat > settings.gradle.kts <<'EOF'
           pluginManagement {
               repositories {
@@ -36,6 +42,7 @@ jobs:
                   gradlePluginPortal()
               }
           }
+
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
@@ -43,6 +50,7 @@ jobs:
                   mavenCentral()
               }
           }
+
           rootProject.name = "SmeyAutoCaption"
           include(":app")
           EOF
@@ -84,19 +92,25 @@ jobs:
 
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.INTERNET" />
+
               <application
+                  android:allowBackup="true"
+                  android:label="🇰🇭 Smey Auto Caption"
+                  android:supportsRtl="true"
                   android:theme="@style/Theme.SmeyAutoCaption"
-                  android:label="Smey Auto Caption"
                   android:usesCleartextTraffic="false">
+
                   <activity
                       android:name=".MainActivity"
-                      android:screenOrientation="portrait"
-                      android:exported="true">
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
+
                   </activity>
               </application>
           </manifest>
@@ -106,8 +120,10 @@ jobs:
           <resources>
               <style name="Theme.SmeyAutoCaption"
                   parent="Theme.Material3.DayNight.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
                   <item name="android:statusBarColor">#080C14</item>
                   <item name="android:navigationBarColor">#080C14</item>
+                  <item name="android:windowLightStatusBar">false</item>
               </style>
           </resources>
           EOF
@@ -118,23 +134,33 @@ jobs:
           import android.app.Activity
           import android.os.Bundle
           import android.webkit.WebChromeClient
+          import android.webkit.WebSettings
           import android.webkit.WebView
           import android.webkit.WebViewClient
 
           class MainActivity : Activity() {
+
               private lateinit var webView: WebView
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
                   webView = WebView(this)
-                  webView.settings.javaScriptEnabled = true
-                  webView.settings.domStorageEnabled = true
-                  webView.settings.mediaPlaybackRequiresUserGesture = false
+
+                  webView.settings.apply {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      mediaPlaybackRequiresUserGesture = false
+                      allowFileAccess = true
+                      allowContentAccess = true
+                      cacheMode = WebSettings.LOAD_DEFAULT
+                  }
+
                   webView.webViewClient = WebViewClient()
                   webView.webChromeClient = WebChromeClient()
 
                   setContentView(webView)
+
                   webView.loadUrl(
                       "https://khmer-auto-caption-vip1.streamlit.app/"
                   )
@@ -159,3 +185,4 @@ jobs:
         with:
           name: SmeyAutoCaption-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
