@@ -15,7 +15,11 @@ import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
+st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
+
+# ===== OFFICIAL USER LOGO — external PNG, no Base64 =====
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SMEY_LOGO_PATH = os.path.join(BASE_DIR, 'assets', 'smey_ai_dubbing_logo.png')
 
 # ===== BEAUTIFUL UI v8 — clean guide, no fake top buttons =====
 st.markdown(r"""
@@ -24,6 +28,8 @@ st.markdown(r"""
 [data-testid="stHeader"]{background:transparent}
 #MainMenu,footer{visibility:hidden}
 .block-container{max-width:760px;padding:14px 14px 42px}
+.smey-logo-wrap{display:flex;justify-content:center;align-items:center;margin:2px 0 12px}
+.smey-logo{width:112px;height:112px;object-fit:contain;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.30)}
 .smey-guide{border:1px solid rgba(255,255,255,.10);border-radius:22px;padding:19px 18px;margin:4px 0 18px;background:linear-gradient(145deg,rgba(255,68,55,.15),rgba(255,255,255,.045));box-shadow:0 14px 38px rgba(0,0,0,.25)}
 .smey-guide-title{font-size:20px;font-weight:900;margin-bottom:10px}
 .smey-guide-sub{font-size:13px;color:#cbd2de;line-height:1.6;margin-bottom:12px}
@@ -50,12 +56,16 @@ st.markdown(r"""
 </div>
 """, unsafe_allow_html=True)
 
+if os.path.exists(SMEY_LOGO_PATH):
+    _logo_l, _logo_c, _logo_r = st.columns([1, 1, 1])
+    with _logo_c:
+        st.image(SMEY_LOGO_PATH, width=112)
+
 st.title('🇰🇭 Smey AI Dubbing')
 st.caption('🎙️ Khmer Neural Natural Voice → Dubbing → Sync Timing')
 st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
 FONT_PATH = os.path.join(FONT_DIR, 'NotoSansKhmer-Regular.ttf')
 FONT_URL = 'https://raw.githubusercontent.com/ghostlypi/NotoSans/main/NotoSansKhmer-Regular.ttf'
