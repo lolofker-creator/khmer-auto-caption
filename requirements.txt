@@ -8,3 +8,4 @@ transformers>=4.46
 torch
 scipy
 faster-whisper
+WHISPER_MODEL = 'large-v3'
