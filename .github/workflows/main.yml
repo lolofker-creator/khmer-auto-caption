@@ -19,27 +19,17 @@ jobs:
       - name: Create Android project
         shell: bash
         run: |
-          mkdir -p app/src/main/java/khmer/smey/autocaption
-          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/java/khmer/smey/autocaption app/src/main/res/values
           cat > gradle.properties <<'EOF'
           android.useAndroidX=true
           android.enableJetifier=true
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           EOF
           cat > settings.gradle.kts <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+              repositories { google(); mavenCentral() }
           }
           rootProject.name = "SmeyAutoCaption"
           include(":app")
@@ -62,15 +52,13 @@ jobs:
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
               }
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
+              kotlinOptions { jvmTarget = "17" }
               defaultConfig {
                   applicationId = "khmer.smey.autocaption"
                   minSdk = 24
                   targetSdk = 35
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 2
+                  versionName = "1.1"
               }
           }
           dependencies {
@@ -84,14 +72,12 @@ jobs:
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
-              <application
-                  android:allowBackup="true"
+              <application android:allowBackup="true"
                   android:label="🇰🇭 Smey Auto Caption"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.SmeyAutoCaption"
                   android:usesCleartextTraffic="false">
-                  <activity
-                      android:name=".MainActivity"
+                  <activity android:name=".MainActivity"
                       android:exported="true"
                       android:screenOrientation="portrait">
                       <intent-filter>
@@ -104,8 +90,7 @@ jobs:
           EOF
           cat > app/src/main/res/values/styles.xml <<'EOF'
           <resources>
-              <style name="Theme.SmeyAutoCaption"
-                  parent="Theme.Material3.DayNight.NoActionBar">
+              <style name="Theme.SmeyAutoCaption" parent="Theme.Material3.DayNight.NoActionBar">
                   <item name="android:fontFamily">sans</item>
                   <item name="android:statusBarColor">#080C14</item>
                   <item name="android:navigationBarColor">#080C14</item>
@@ -115,23 +100,28 @@ jobs:
           EOF
           cat > app/src/main/java/khmer/smey/autocaption/MainActivity.kt <<'EOF'
           package khmer.smey.autocaption
+
           import android.app.Activity
+          import android.app.DownloadManager
           import android.content.Intent
           import android.net.Uri
           import android.os.Bundle
+          import android.os.Environment
+          import android.webkit.CookieManager
+          import android.webkit.URLUtil
           import android.webkit.ValueCallback
           import android.webkit.WebChromeClient
           import android.webkit.WebSettings
           import android.webkit.WebView
           import android.webkit.WebViewClient
-          class MainActivity : Activity() {
+          import android.widget.Toast
 
+          class MainActivity : Activity() {
               private lateinit var webView: WebView
               private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-
                   webView = WebView(this)
                   webView.settings.apply {
                       javaScriptEnabled = true
@@ -141,9 +131,7 @@ jobs:
                       allowContentAccess = true
                       cacheMode = WebSettings.LOAD_DEFAULT
                   }
-
                   webView.webViewClient = WebViewClient()
-
                   webView.webChromeClient = object : WebChromeClient() {
                       override fun onShowFileChooser(
                           view: WebView?,
@@ -152,13 +140,11 @@ jobs:
                       ): Boolean {
                           filePathCallback?.onReceiveValue(null)
                           filePathCallback = filePath
-
                           val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                               addCategory(Intent.CATEGORY_OPENABLE)
                               type = "video/*"
                               putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
                           }
-
                           return try {
                               startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE)
                               true
@@ -170,24 +156,43 @@ jobs:
                       }
                   }
 
-                  setContentView(webView)
+                  webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                      try {
+                          val fileName = URLUtil.guessFileName(
+                              url, contentDisposition, mimeType ?: "application/octet-stream"
+                          )
+                          val request = DownloadManager.Request(Uri.parse(url)).apply {
+                              setMimeType(mimeType ?: "application/octet-stream")
+                              setTitle(fileName)
+                              setDescription("Smey AI Dubbing")
+                              setNotificationVisibility(
+                                  DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                              )
+                              setDestinationInExternalPublicDir(
+                                  Environment.DIRECTORY_DOWNLOADS, fileName
+                              )
+                              CookieManager.getInstance().getCookie(url)?.let {
+                                  addRequestHeader("Cookie", it)
+                              }
+                              if (!userAgent.isNullOrEmpty()) addRequestHeader("User-Agent", userAgent)
+                          }
+                          val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                          dm.enqueue(request)
+                          Toast.makeText(this, "ចាប់ផ្ដើមទាញយកទៅ Downloads", Toast.LENGTH_SHORT).show()
+                      } catch (e: Exception) {
+                          Toast.makeText(this, "Download មិនបាន: ${e.message}", Toast.LENGTH_LONG).show()
+                      }
+                  }
 
-                  webView.loadUrl(
-                      "https://khmer-auto-caption-vip1.streamlit.app/"
-                  )
+                  setContentView(webView)
+                  webView.loadUrl("https://khmer-auto-caption-vip1.streamlit.app/")
               }
 
               @Deprecated("Deprecated in Java")
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
-
                   if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
-                      val results = if (resultCode == RESULT_OK && data?.data != null) {
-                          arrayOf(data.data!!)
-                      } else {
-                          null
-                      }
-
+                      val results = if (resultCode == RESULT_OK && data?.data != null) arrayOf(data.data!!) else null
                       filePathCallback?.onReceiveValue(results)
                       filePathCallback = null
                   }
@@ -195,16 +200,10 @@ jobs:
 
               @Deprecated("Deprecated in Java")
               override fun onBackPressed() {
-                  if (webView.canGoBack()) {
-                      webView.goBack()
-                  } else {
-                      super.onBackPressed()
-                  }
+                  if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
               }
 
-              companion object {
-                  private const val FILE_CHOOSER_REQUEST_CODE = 1001
-              }
+              companion object { private const val FILE_CHOOSER_REQUEST_CODE = 1001 }
           }
           EOF
       - name: Build APK
@@ -212,6 +211,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmeyAutoCaption-APK
+          name: SmeyAutoCaption-APK-DOWNLOAD-FIXED
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
