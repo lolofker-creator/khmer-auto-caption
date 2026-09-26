@@ -1,6 +1,8 @@
 streamlit
 faster-whisper
-imageio-ffmpeg
+edge-tts
 yt-dlp
 gTTS
-edge-tts
+imageio-ffmpeg
+gradio_client
+google-genai
