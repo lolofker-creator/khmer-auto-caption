@@ -878,6 +878,90 @@ def webpage_download(page_url, output_path):
     return page_media_download(page_url, output_path)
 
 
+
+# ============================================================
+# VOICE CLONE — VoxCPM2 (additive feature; does not remove AI Dubbing)
+# ============================================================
+@st.cache_resource(show_spinner=False)
+def load_voxcpm2_model():
+    try:
+        from voxcpm import VoxCPM
+    except ImportError as exc:
+        raise RuntimeError('Voice Clone ត្រូវការ package voxcpm ក្នុង requirements.txt') from exc
+    # VoxCPM2 supports reference_wav_path for zero-shot voice cloning.
+    return VoxCPM.from_pretrained(
+        'openbmb/VoxCPM2',
+        load_denoiser=False,
+        device='cpu',
+    )
+
+
+def voxcpm2_clone_segment(model, text, reference_wav, output_wav):
+    import soundfile as sf
+    text = re.sub(r'\s+', ' ', str(text or '')).strip()
+    if not text:
+        raise ValueError('អត្ថបទសម្រាប់ Voice Clone ទទេ')
+    wav = model.generate(
+        text=text,
+        reference_wav_path=reference_wav,
+        cfg_value=2.0,
+        inference_timesteps=10,
+        normalize=True,
+    )
+    sf.write(output_wav, wav, model.tts_model.sample_rate)
+    if not os.path.isfile(output_wav) or os.path.getsize(output_wav) < 1000:
+        raise RuntimeError('VoxCPM2 មិនបានបង្កើតសំឡេង')
+    return output_wav
+
+
+def make_voice_clone_audio(translated_groups, reference_wav, temp_dir, total_duration):
+    """Generate cloned-voice segments and place them on the original timeline."""
+    clone_model = load_voxcpm2_model()
+    timeline = os.path.join(temp_dir, 'voice_clone_timeline.wav')
+    segment_files = []
+    normalized_groups = []
+    for i, item in enumerate(translated_groups):
+        text = str(item.get('text', '')).strip()
+        if not text:
+            continue
+        start = float(item.get('start', 0.0))
+        end = float(item.get('end', start + 0.8))
+        if end <= start:
+            end = start + 0.8
+        raw = os.path.join(temp_dir, f'clone_raw_{i:04d}.wav')
+        fitted = os.path.join(temp_dir, f'clone_fit_{i:04d}.wav')
+        voxcpm2_clone_segment(clone_model, text, reference_wav, raw)
+        fit_audio_to_duration(raw, fitted, end - start)
+        segment_files.append((fitted, start, end))
+        normalized_groups.append({'text': text, 'start': start, 'end': end})
+
+    if not segment_files:
+        raise RuntimeError('មិនមានអត្ថបទសម្រាប់ Voice Clone')
+
+    # Build a silent timeline, then mix each cloned segment at its original timing.
+    command = [ffmpeg(), '-y', '-f', 'lavfi', '-i', f'anullsrc=r=16000:cl=mono', '-t', str(max(0.2, total_duration)), '-c:a', 'pcm_s16le', timeline]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise RuntimeError('មិនអាចបង្កើត Voice Clone timeline')
+
+    inputs = ['-i', timeline]
+    for path, _, _ in segment_files:
+        inputs += ['-i', path]
+    filters = []
+    labels = []
+    for idx, (_, start, end) in enumerate(segment_files, start=1):
+        label = f'a{idx}'
+        filters.append(f'[{idx}:a]adelay={int(start*1000)}:all=1[{label}]')
+        labels.append(f'[{label}]')
+    filters.append('[0:a]' + ''.join(labels) + f'amix=inputs={len(labels)+1}:duration=longest:normalize=0[vo]')
+    mixed = os.path.join(temp_dir, 'voice_clone_mixed.wav')
+    command = [ffmpeg(), '-y'] + inputs + ['-filter_complex', ';'.join(filters), '-map', '[vo]', '-t', str(max(0.2, total_duration)), '-ar', '16000', '-ac', '1', mixed]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        err = result.stderr.decode('utf-8', errors='ignore')
+        raise RuntimeError('Voice Clone timeline mix failed:\n' + err[-2500:])
+    return mixed
+
 with dubbing_slot.container():
     st.markdown('<div class="smey-dubbing-top">', unsafe_allow_html=True)
     with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing', expanded=True):
@@ -926,4 +1010,70 @@ with dubbing_slot.container():
                 st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
             except Exception as e:
                 st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
+
+
+    with st.expander('🎙️ Voice Clone — Clone សំឡេងពិតពី Voice Reference', expanded=False):
+        st.info('🎙️ Upload សម្លេង Reference 5–15 វិនាទី → VoxCPM2 Clone សម្លេង → និយាយអត្ថបទ Dubbing → Sync ចូលវីដេអូ។ ប្រើសម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាត។')
+        clone_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='clone_source')
+        clone_target = st.selectbox('ភាសា Voice Clone Dubbing', ['Khmer', 'Chinese', 'English'], key='clone_target')
+        clone_video = st.file_uploader('📤 Upload Video សម្រាប់ Voice Clone', type=['mp4','mov','mkv','webm','avi'], key='clone_video')
+        clone_reference = st.file_uploader('🎤 Upload Voice Reference', type=['wav','mp3','m4a','aac','ogg','flac'], key='clone_reference')
+        clone_text_hint = st.text_input('📝 Voice Reference Text (Optional)', key='clone_text_hint', placeholder='បើដឹងអត្ថបទដែលនិយាយក្នុងសំឡេង Reference អាចដាក់បាន')
+        if clone_video:
+            st.video(clone_video)
+        if clone_reference:
+            st.audio(clone_reference)
+
+        if st.button('🎙️ Clone Voice + បង្កើត Dubbing', type='primary', key='clone_button'):
+            if not clone_video:
+                st.warning('សូម Upload Video ជាមុន')
+                st.stop()
+            if not clone_reference:
+                st.warning('សូម Upload Voice Reference ជាមុន')
+                st.stop()
+
+            temp_dir = tempfile.mkdtemp()
+            input_video = os.path.join(temp_dir, 'clone_input.mp4')
+            source_audio = os.path.join(temp_dir, 'clone_source.wav')
+            reference_audio = os.path.join(temp_dir, 'clone_reference.wav')
+            output_video = os.path.join(temp_dir, 'Smey_AI_Voice_Clone.mp4')
+            try:
+                with open(input_video, 'wb') as f:
+                    f.write(clone_video.getbuffer())
+                with open(os.path.join(temp_dir, 'reference_upload'), 'wb') as f:
+                    f.write(clone_reference.getbuffer())
+                uploaded_reference = os.path.join(temp_dir, 'reference_upload')
+
+                # Normalize reference audio to WAV for VoxCPM2.
+                result = subprocess.run([ffmpeg(), '-y', '-i', uploaded_reference, '-vn', '-ac', '1', '-ar', '16000', reference_audio], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if result.returncode != 0:
+                    raise RuntimeError('Voice Reference audio មិនអាចបម្លែងទៅ WAV បាន')
+
+                with st.status('កំពុង Clone Voice + Dubbing...', expanded=True) as status:
+                    st.write('🎧 1/5 កំពុងស្តាប់សំឡេងដោយ Local Whisper...')
+                    extract_audio(input_video, source_audio)
+                    words = transcribe_local(source_audio, clone_source if clone_source != 'Auto' else None)
+                    if not words:
+                        raise RuntimeError('រកមិនឃើញ Word Timing')
+                    groups = make_groups(words)
+
+                    st.write('🔄 2/5 កំពុងបកប្រែដោយ Free Translation...')
+                    translated = translate_groups(None, groups, clone_target, clone_source)
+
+                    st.write('🎙️ 3/5 កំពុង Clone សំឡេងដោយ VoxCPM2...')
+                    total = max((x['end'] for x in groups), default=audio_duration(source_audio))
+                    clone_audio = make_voice_clone_audio(translated, reference_audio, temp_dir, total)
+
+                    st.write('🎬 4/5 កំពុង Sync + រក្សា Background Music...')
+                    replace_video_audio(input_video, clone_audio, output_video)
+                    status.update(label='✅ Voice Clone Dubbing រួចរាល់!', state='complete')
+
+                st.subheader('🎬 Result — Voice Clone')
+                st.video(output_video)
+                with open(output_video, 'rb') as f:
+                    clone_data = f.read()
+                st.download_button('📥 Download Voice Clone MP4', clone_data, file_name='Smey_AI_Voice_Clone.mp4', mime='video/mp4', key='download_clone', on_click='ignore')
+                st.caption('VoxCPM2 ត្រូវការធនធានម៉ាស៊ីនច្រើនជាង Edge TTS ដូច្នេះការបង្កើតអាចយូរជាង AI Dubbing ធម្មតា។')
+            except Exception as e:
+                st.error(f'❌ Voice Clone មិនអាចបញ្ចប់បាន: {e}')
 
