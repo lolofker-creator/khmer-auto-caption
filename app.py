@@ -629,6 +629,74 @@ def translate_groups(client, groups, target_language, source_language='Auto'):
 
     return translated
 
+
+
+def translate_clone_groups_strict(groups, target_language, source_language='Auto'):
+    """Strict Voice Clone translation. Never allow source-language text to reach VoxCPM when Khmer is requested."""
+    if not groups:
+        return groups
+    if target_language != 'Khmer':
+        return translate_groups(None, groups, target_language, source_language)
+
+    out = []
+    failures = []
+    for index, item in enumerate(groups, start=1):
+        src = str(item.get('text', '')).replace('\n', ' ').strip()
+        if not src:
+            continue
+        result = None
+        errors = []
+
+        # Force Chinese/Khmer source explicitly instead of relying on a provider's detection.
+        detected = _detect_source_language(src, source_language)
+        source_codes = [detected]
+        if detected != 'zh-CN' and re.search(r'[\u3400-\u9FFF]', src):
+            source_codes.insert(0, 'zh-CN')
+
+        for source_code in source_codes:
+            try:
+                # Google endpoint with explicit tl=km is the primary path here.
+                url = (
+                    'https://translate.googleapis.com/translate_a/single?client=gtx'
+                    f'&sl={urllib.parse.quote(source_code)}&tl=km&dt=t&q='
+                    + urllib.parse.quote(src)
+                )
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=25) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                parts = data[0] if isinstance(data, list) and data else []
+                candidate = ''.join(
+                    str(part[0]) for part in parts
+                    if isinstance(part, list) and part and part[0]
+                ).strip()
+                if candidate and _translation_is_valid(candidate, 'Khmer'):
+                    result = candidate
+                    break
+                errors.append('Google returned non-Khmer text')
+            except Exception as exc:
+                errors.append(str(exc))
+
+        if result is None:
+            try:
+                candidate = _mymemory_translate(src, 'Khmer', 'Chinese' if 'zh-CN' in source_codes else source_language)
+                if _translation_is_valid(candidate, 'Khmer'):
+                    result = candidate
+            except Exception as exc:
+                errors.append(f'MyMemory: {exc}')
+
+        if result is None or not _translation_is_valid(result, 'Khmer'):
+            failures.append((index, src[:80], '; '.join(errors[-2:])))
+            continue
+
+        out.append({'text': result, 'start': item['start'], 'end': item['end']})
+
+    if failures:
+        sample = '; '.join(f'#{i}: {src} -> {err}' for i, src, err in failures[:2])
+        raise RuntimeError('Voice Clone បកប្រែទៅខ្មែរមិនបាន។ មិនអនុញ្ញាតឱ្យប្រើអត្ថបទចិនដើមជំនួសទេ: ' + sample)
+    if not out:
+        raise RuntimeError('Voice Clone មិនមានអត្ថបទខ្មែរសម្រាប់បង្កើតសំឡេង')
+    return out
+
 ASS_HEADER = '[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans Khmer,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,55,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 
 def make_ass(groups, ass_path):
@@ -1155,8 +1223,11 @@ with dubbing_slot.container():
                                 groups = make_groups(words)
 
                                 st.write('🔄 2/5 កំពុងបកប្រែដោយ Free Translation...')
-                                translated = translate_groups(None, groups, clone_target, clone_source)
+                                translated = translate_clone_groups_strict(groups, clone_target, clone_source)
+                                if clone_target == 'Khmer' and translated:
+                                    st.caption('🇰🇭 Khmer Translation: ' + ' | '.join(x['text'] for x in translated[:3]))
 
+                                st.write('🇰🇭 2/5 បកប្រែទៅជាខ្មែរជាមុនសិន...')
                                 st.write('🎙️ 3/5 កំពុង Clone សំឡេងតាម VoxCPM2 Remote (Hugging Face)...')
                                 total = max((x['end'] for x in groups), default=audio_duration(source_audio))
                                 # VoxCPM-Demo supports prompt-based cloning with reference audio + transcript.
