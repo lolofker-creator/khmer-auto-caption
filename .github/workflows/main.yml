@@ -241,54 +241,86 @@ jobs:
               private fun installDownloadBridge() {
                   val js = """
                       (function() {
-                        if (window.__smeyDownloadInstalled) return;
-                        window.__smeyDownloadInstalled = true;
+                        if (window.__smeyDownloadV5) return;
+                        window.__smeyDownloadV5 = true;
 
-                        document.addEventListener('click', function(e) {
-                          var a = e.target.closest ? e.target.closest('a') : null;
-                          if (!a) return;
-
+                        function sendAnchor(a) {
+                          if (!a) return false;
                           var href = a.href || '';
-                          var hasDownload = a.hasAttribute('download');
+                          var name = a.getAttribute('download') || 'Smey_AI_Dubbing.mp4';
                           var isBlob = href.indexOf('blob:') === 0;
                           var isData = href.indexOf('data:') === 0;
+                          var looksDownload = a.hasAttribute('download') || isBlob || isData;
+                          if (!looksDownload) return false;
 
-                          if (!hasDownload && !isBlob && !isData) return;
-
-                          e.preventDefault();
-                          e.stopPropagation();
-
-                          var name = a.getAttribute('download') || 'Smey_AI_Dubbing.mp4';
-
-                          if (isBlob) {
-                            fetch(href).then(function(r) {
-                              var mime = r.headers.get('content-type') || 'video/mp4';
-                              return r.blob().then(function(b) {
-                                return new Promise(function(resolve) {
-                                  var reader = new FileReader();
-                                  reader.onloadend = function() {
-                                    resolve(String(reader.result).split(',')[1]);
-                                  };
-                                  reader.readAsDataURL(b);
-                                }).then(function(b64) {
-                                  window.SmeyDownload.startBlob(name, mime, b64);
+                          try {
+                            if (isBlob) {
+                              fetch(href).then(function(r) {
+                                var mime = r.headers.get('content-type') || 'video/mp4';
+                                return r.blob().then(function(b) {
+                                  return new Promise(function(resolve, reject) {
+                                    var reader = new FileReader();
+                                    reader.onloadend = function() {
+                                      try { resolve(String(reader.result).split(',')[1]); }
+                                      catch(e) { reject(e); }
+                                    };
+                                    reader.onerror = reject;
+                                    reader.readAsDataURL(b);
+                                  }).then(function(b64) {
+                                    window.SmeyDownload.startBlob(name, mime, b64);
+                                  });
                                 });
+                              }).catch(function(err) {
+                                window.SmeyDownload.error('Download មិនបាន: ' + err);
                               });
-                            }).catch(function() {
-                              window.SmeyDownload.error('មិនអាចអានឯកសារ Download បាន');
-                            });
-                          } else if (isData) {
-                            var comma = href.indexOf(',');
-                            var meta = href.substring(5, comma);
-                            var b64 = href.substring(comma + 1);
-                            var mime = (meta.split(';')[0] || 'video/mp4');
-                            window.SmeyDownload.startBlob(name, mime, b64);
-                          } else {
-                            window.SmeyDownload.startUrl(href, name);
+                            } else if (isData) {
+                              var comma = href.indexOf(',');
+                              var meta = href.substring(5, comma);
+                              var data = href.substring(comma + 1);
+                              var mime = (meta.split(';')[0] || 'video/mp4');
+                              window.SmeyDownload.startBlob(name, mime, data);
+                            } else {
+                              window.SmeyDownload.startUrl(href, name);
+                            }
+                            return true;
+                          } catch(err) {
+                            window.SmeyDownload.error('Download មិនបាន: ' + err);
+                            return false;
                           }
+                        }
 
-                          return false;
+                        // Catch normal <a download>, blob: and data: links.
+                        document.addEventListener('click', function(e) {
+                          var a = e.target && e.target.closest ? e.target.closest('a') : null;
+                          if (a && sendAnchor(a)) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                          }
                         }, true);
+
+                        // Streamlit may create an anchor and call anchor.click() programmatically.
+                        var originalAnchorClick = HTMLAnchorElement.prototype.click;
+                        HTMLAnchorElement.prototype.click = function() {
+                          if (sendAnchor(this)) return;
+                          return originalAnchorClick.call(this);
+                        };
+
+                        // Watch for dynamically-created download anchors.
+                        var observer = new MutationObserver(function() {
+                          var links = document.querySelectorAll('a[download], a[href^="blob:"], a[href^="data:"]');
+                          for (var i = 0; i < links.length; i++) {
+                            if (!links[i].__smeyBound) {
+                              links[i].__smeyBound = true;
+                              links[i].addEventListener('click', function(e) {
+                                if (sendAnchor(this)) {
+                                  e.preventDefault();
+                                  e.stopImmediatePropagation();
+                                }
+                              }, true);
+                            }
+                          }
+                        });
+                        observer.observe(document.documentElement || document.body, {childList:true, subtree:true});
                       })();
                   """.trimIndent()
 
