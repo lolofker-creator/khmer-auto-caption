@@ -13,8 +13,6 @@ import asyncio
 from gtts import gTTS
 import asyncio
 import streamlit as st
-from google import genai
-from google.genai import types
 import imageio_ffmpeg
 st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
 
