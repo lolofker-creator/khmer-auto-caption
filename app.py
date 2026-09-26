@@ -1078,52 +1078,87 @@ def voxcpm_remote_clone_segment(text, reference_wav, reference_text, output_wav,
 
 # ============================================================
 # REMOTE LIP SYNC — Wav2Lip via Hugging Face
-# ============================================================
-@st.cache_resource(show_spinner=False)
-def get_lipsync_client():
+# v36: download remote output through gradio_client instead of constructing
+# a /file=/home/user/... URL (which can return HTTP 403).
+
+def _make_lipsync_client(output_dir):
     try:
         from gradio_client import Client
     except ImportError as exc:
         raise RuntimeError('ត្រូវការ gradio_client សម្រាប់ Lip Sync') from exc
-    return Client('manavisrani07/gradio-lipsync-wav2lip')
+    os.makedirs(output_dir, exist_ok=True)
+    return Client(
+        'manavisrani07/gradio-lipsync-wav2lip',
+        download_files=output_dir,
+    )
 
 
-def _normalize_remote_video_result(result, output_path):
+def _normalize_remote_video_result(result, output_path, client=None):
     import urllib.request
+    import httpx
+
     value = result
     if isinstance(value, dict):
-        value = value.get('path') or value.get('url') or value.get('value')
-    if hasattr(value, 'path'):
-        value = value.path
+        # Prefer a locally downloaded path. Otherwise use the normalized URL.
+        local_path = value.get('path')
+        url = value.get('url')
+        value = local_path if local_path else url or value.get('value')
+    elif hasattr(value, 'path') or hasattr(value, 'url'):
+        local_path = getattr(value, 'path', None)
+        url = getattr(value, 'url', None)
+        value = local_path if local_path else url
+
     if isinstance(value, tuple) and value:
         value = value[0]
-        if hasattr(value, 'path'):
-            value = value.path
+        if hasattr(value, 'path') or hasattr(value, 'url'):
+            local_path = getattr(value, 'path', None)
+            url = getattr(value, 'url', None)
+            value = local_path if local_path else url
+
     if isinstance(value, str):
-        if value.startswith(('http://', 'https://')):
-            urllib.request.urlretrieve(value, output_path)
-        elif os.path.isfile(value):
+        if os.path.isfile(value):
             shutil.copyfile(value, output_path)
+        elif value.startswith(('http://', 'https://')):
+            # The remote file route can require the same headers/cookies used
+            # by gradio_client. Use them first; fall back to plain download.
+            downloaded = False
+            if client is not None:
+                try:
+                    with httpx.stream(
+                        'GET', value,
+                        headers=getattr(client, 'headers', None),
+                        cookies=getattr(client, 'cookies', None),
+                        follow_redirects=True,
+                        timeout=180,
+                    ) as response:
+                        response.raise_for_status()
+                        with open(output_path, 'wb') as f:
+                            for chunk in response.iter_bytes():
+                                f.write(chunk)
+                    downloaded = True
+                except Exception:
+                    pass
+            if not downloaded:
+                urllib.request.urlretrieve(value, output_path)
         else:
             raise RuntimeError('Lip Sync មិនបានបញ្ជូនវីដេអូត្រឡប់មកវិញ')
     else:
         raise RuntimeError(f'Lip Sync result មិនស្គាល់ប្រភេទ: {type(result).__name__}')
+
     if not os.path.isfile(output_path) or os.path.getsize(output_path) < 10000:
         raise RuntimeError('Lip Sync output មិនត្រឹមត្រូវ')
     return output_path
 
 
 def run_remote_lipsync(video_path, audio_path, output_path):
-    """Run Wav2Lip remotely so Streamlit Cloud does not need the huge model."""
+    """Run Wav2Lip remotely and download its output locally."""
     from gradio_client import handle_file
-    client = get_lipsync_client()
+    temp_output_dir = os.path.dirname(os.path.abspath(output_path))
+    client = _make_lipsync_client(temp_output_dir)
     video_file = handle_file(video_path)
     audio_file = handle_file(audio_path)
     last_error = None
 
-    # Current public Space exposes a /generate endpoint. Its current event
-    # wiring uses these 8 inputs: video, audio, checkpoint, pad_top,
-    # pad_bottom, pad_left, pad_right, resize_factor.
     attempts = [
         ('/generate', [video_file, audio_file, 'wav2lip_gan', 0, 10, 0, 0, 1]),
         ('/generate', [video_file, audio_file, 'wav2lip', 0, 10, 0, 0, 1]),
@@ -1131,11 +1166,10 @@ def run_remote_lipsync(video_path, audio_path, output_path):
     for api_name, args in attempts:
         try:
             result = client.predict(*args, api_name=api_name)
-            return _normalize_remote_video_result(result, output_path)
+            return _normalize_remote_video_result(result, output_path, client)
         except Exception as exc:
             last_error = exc
     raise RuntimeError('Remote Lip Sync មិនអាចដំណើរការ: ' + str(last_error))
-
 
 def mix_lipsync_with_background(lipsync_video, original_video, dubbing_audio, output_path):
     """Keep the lip-synced video while restoring the original background bed."""
