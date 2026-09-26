@@ -1,9 +1,6 @@
 streamlit
-google-genai
 faster-whisper
 imageio-ffmpeg
-av
 yt-dlp
 gTTS
 edge-tts
-soundfile
