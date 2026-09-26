@@ -252,176 +252,213 @@ def transcribe(client, audio_path, source_language):
         return client.models.generate_content(model=TRANSCRIBE_MODEL, contents=[types.Part.from_bytes(data=audio_data, mime_type='audio/wav'), prompt], config=types.GenerateContentConfig(audio_transcription_config=transcription_config))
     return retry_gemini(call)
 
+def _detect_source_language(text, source_language='Auto'):
+    """Resolve the source language reliably when UI is set to Auto."""
+    if source_language and source_language != 'Auto':
+        return {'Chinese': 'zh-CN', 'Khmer': 'km-KM', 'English': 'en-US'}.get(
+            source_language, 'en-US'
+        )
+    if re.search(r'[\u3400-\u9FFF]', text):
+        return 'zh-CN'
+    if re.search(r'[\u1780-\u17FF]', text):
+        return 'km-KM'
+    return 'en-US'
+
+
 def _mymemory_translate(text, target_language, source_language='auto'):
-    """Free fallback translation API used when Google Translate is rate-limited."""
+    """Free MyMemory translation fallback.
+
+    Uses RFC3066 language codes and checks responseStatus so API error text
+    is never mistaken for a successful translation.
+    """
     if not text.strip():
         return text
 
-    target_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
+    target_map = {
+        'Khmer': 'km-KM',
+        'Chinese': 'zh-CN',
+        'English': 'en-US',
+    }
     target = target_map.get(target_language)
     if not target:
         return text
 
-    source_map = {'Chinese': 'zh-CN', 'Khmer': 'km', 'English': 'en'}
-    source = source_map.get(source_language, 'en')
+    source = _detect_source_language(text, source_language)
+
+    # MyMemory documents a 500-byte maximum for q. Keep a safety margin.
+    raw = text.strip()
+    if len(raw.encode('utf-8')) > 480:
+        parts = []
+        current = ''
+        for piece in re.split(r'(?<=[.!?。！？])\s+|\s+', raw):
+            candidate = (current + ' ' + piece).strip()
+            if candidate and len(candidate.encode('utf-8')) <= 480:
+                current = candidate
+            else:
+                if current:
+                    parts.append(current)
+                current = piece
+        if current:
+            parts.append(current)
+        if len(parts) > 1:
+            translated_parts = [
+                _mymemory_translate(part, target_language, source_language)
+                for part in parts
+            ]
+            return ' '.join(translated_parts)
+
+    params = {
+        'q': raw,
+        'langpair': f'{source}|{target}',
+        'mt': '1',
+    }
+
+    # Optional email can increase MyMemory's anonymous daily allowance.
+    # It is only used if the user has explicitly configured it.
+    email = secret('MYMEMORY_EMAIL')
+    if email:
+        params['de'] = email
 
     url = (
         'https://api.mymemory.translated.net/get?'
-        f'q={urllib.parse.quote(text)}'
-        f'&langpair={urllib.parse.quote(source)}%7C{urllib.parse.quote(target)}'
+        + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     )
 
     req = urllib.request.Request(
         url,
-        headers={'User-Agent': 'Mozilla/5.0 (Android 12; Mobile)'},
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Android 12; Mobile)',
+            'Accept': 'application/json',
+        },
     )
 
     with urllib.request.urlopen(req, timeout=30) as response:
         data = json.loads(response.read().decode('utf-8'))
 
+    status = str(data.get('responseStatus', ''))
+    details = str(data.get('responseDetails', '') or '').strip()
     result = str(
         data.get('responseData', {}).get('translatedText', '')
     ).strip()
 
+    if status not in ('', '200'):
+        raise RuntimeError(
+            f'MyMemory HTTP/status {status}: {details or result or "unknown error"}'
+        )
     if not result:
         raise RuntimeError('MyMemory មិនបានបញ្ជូនលទ្ធផល')
-
-    # MyMemory can return a quota/error message in the translatedText field.
+    if result.upper() == raw.upper():
+        # Same text can be legitimate for names/numbers, but it is not useful
+        # as a Chinese/English -> Khmer translation.
+        if target_language == 'Khmer' and not re.search(r'[\u1780-\u17FF]', result):
+            raise RuntimeError('MyMemory មិនបានបកប្រែទៅជាខ្មែរ')
     low = result.lower()
-    if 'please select' in low or 'limit' in low or 'error' in low:
+    if any(x in low for x in (
+        'invalid target language',
+        'invalid source language',
+        'please select',
+        'error',
+        'limit exceeded',
+        'quota',
+    )):
         raise RuntimeError(f'MyMemory Translation: {result}')
 
     return result
 
 
-def _google_free_translate(text, target_language, source_language='auto', attempts=4):
-    """Google Translate first; automatically fall back to MyMemory on 429."""
-    if not text.strip():
-        return text
-
+def _google_translate_once(text, target_language, source_language='auto', host='translate.googleapis.com'):
     target_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
     target = target_map.get(target_language)
     if not target:
         return text
 
-    source_map = {'Chinese': 'zh-CN', 'Khmer': 'km', 'English': 'en'}
-    source = source_map.get(source_language, 'auto')
+    source = _detect_source_language(text, source_language)
+    source = {'km-KM': 'km', 'en-US': 'en'}.get(source, source)
 
     url = (
-        'https://translate.googleapis.com/translate_a/single?client=gtx'
+        f'https://{host}/translate_a/single?client=gtx'
         f'&sl={urllib.parse.quote(source)}&tl={urllib.parse.quote(target)}'
         '&dt=t&q=' + urllib.parse.quote(text)
     )
+    req = urllib.request.Request(
+        url,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Android 12; Mobile)',
+            'Accept': 'application/json,text/plain,*/*',
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as response:
+        data = json.loads(response.read().decode('utf-8'))
 
-    for attempt in range(attempts):
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Android 12; Mobile)',
-                    'Accept': 'application/json,text/plain,*/*',
-                },
-            )
-            with urllib.request.urlopen(req, timeout=30) as response:
-                data = json.loads(response.read().decode('utf-8'))
+    parts = data[0] if isinstance(data, list) and data else []
+    result = ''.join(
+        str(part[0])
+        for part in parts
+        if isinstance(part, list) and part and part[0]
+    ).strip()
+    if not result:
+        raise RuntimeError('Google Translation មិនបានបញ្ជូនលទ្ធផល')
+    return result
 
-            parts = data[0] if isinstance(data, list) and data else []
-            result = ''.join(
-                str(part[0])
-                for part in parts
-                if isinstance(part, list) and part and part[0]
-            )
 
-            if result.strip():
-                return result.strip()
+def _google_free_translate(text, target_language, source_language='auto', attempts=2):
+    """Free translation: MyMemory first, then Google as a second fallback.
 
-            raise RuntimeError('Google Translation មិនបានបញ្ជូនលទ្ធផល')
+    This avoids making Google the only dependency and fixes the previous
+    failure where Google HTTP 429 caused every segment to fail.
+    """
+    if not text.strip():
+        return text
 
-        except urllib.error.HTTPError as exc:
-            # The screenshot shows HTTP 429. Do not keep hammering Google;
-            # switch to the independent free fallback immediately.
-            if exc.code == 429:
-                try:
-                    return _mymemory_translate(
-                        text, target_language, source_language
-                    )
-                except Exception:
-                    # If fallback is temporarily unavailable, retry Google
-                    # only after a short backoff.
-                    if attempt == attempts - 1:
-                        raise RuntimeError(
-                            'Google Translation និង MyMemory សុទ្ធតែមិនអាចបកប្រែបាន'
-                        ) from exc
-                    time.sleep(min(6.0, 1.5 * (2 ** attempt)))
-                    continue
-            raise
+    errors = []
 
-        except Exception as exc:
-            message = str(exc).lower()
-            temporary = any(
-                code in message
-                for code in (
-                    'timed out', 'timeout', 'connection reset',
-                    'temporarily unavailable', '503', '502'
+    # Primary free provider: MyMemory.
+    try:
+        result = _mymemory_translate(text, target_language, source_language)
+        if _translation_is_valid(result, target_language):
+            return result.strip()
+        errors.append('MyMemory លទ្ធផលមិនមែនជាភាសាគោលដៅ')
+    except Exception as exc:
+        errors.append(f'MyMemory: {exc}')
+
+    # Secondary free provider: Google web endpoint.
+    for host in ('translate.googleapis.com', 'translate.google.com'):
+        for attempt in range(attempts):
+            try:
+                result = _google_translate_once(
+                    text, target_language, source_language, host=host
                 )
-            )
-            if not temporary or attempt == attempts - 1:
-                # One final independent fallback for connection errors too.
-                try:
-                    return _mymemory_translate(
-                        text, target_language, source_language
-                    )
-                except Exception:
-                    raise
-            time.sleep(min(6.0, 1.5 * (2 ** attempt)))
+                if _translation_is_valid(result, target_language):
+                    return result
+                errors.append(f'Google {host}: លទ្ធផលមិនមែនជាភាសាគោលដៅ')
+                break
+            except urllib.error.HTTPError as exc:
+                errors.append(f'Google {host} HTTP {exc.code}')
+                if exc.code not in (429, 502, 503, 504):
+                    break
+                if attempt < attempts - 1:
+                    time.sleep(1.5 * (attempt + 1))
+            except Exception as exc:
+                errors.append(f'Google {host}: {exc}')
+                break
 
-    raise RuntimeError('Free Translation failed')
+    raise RuntimeError(' | '.join(errors[-4:]))
 
 
 def _translate_batch(texts, target_language, source_language='Auto'):
-    """Translate small batches, with a second free provider as fallback."""
-    if not texts:
-        return []
-
-    batch_size = 5
-    separator = '\n\n<<<SMEY_SEGMENT_7F3A>>>\n\n'
+    """Translate segments one by one to keep timing alignment exact."""
     results = []
-
-    for offset in range(0, len(texts), batch_size):
-        batch = texts[offset:offset + batch_size]
-        combined = separator.join(
-            t.replace('\n', ' ').strip() for t in batch
+    for text in texts:
+        result = _google_free_translate(
+            text,
+            target_language,
+            source_language,
+            attempts=2,
         )
-
-        # Batch Google first. If it is rate-limited, translate each item
-        # through the independent fallback instead of failing the whole job.
-        try:
-            translated = _google_free_translate(
-                combined, target_language, source_language
-            )
-            pieces = [
-                p.strip()
-                for p in translated.split('<<<SMEY_SEGMENT_7F3A>>>')
-            ]
-
-            if len(pieces) == len(batch) and all(pieces):
-                results.extend(pieces)
-                if offset + batch_size < len(texts):
-                    time.sleep(0.6)
-                continue
-        except Exception:
-            pass
-
-        for text in batch:
-            results.append(
-                _google_free_translate(
-                    text, target_language, source_language, attempts=3
-                )
-            )
-            time.sleep(0.8)
-
+        results.append(result)
+        # Small delay prevents a burst against free endpoints.
+        time.sleep(0.35)
     return results
-
 
 def _translation_is_valid(text, target_language):
     text = text.strip()
