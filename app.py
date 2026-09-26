@@ -252,8 +252,8 @@ def transcribe(client, audio_path, source_language):
         return client.models.generate_content(model=TRANSCRIBE_MODEL, contents=[types.Part.from_bytes(data=audio_data, mime_type='audio/wav'), prompt], config=types.GenerateContentConfig(audio_transcription_config=transcription_config))
     return retry_gemini(call)
 
-def _google_free_translate(text, target_language, source_language='auto', attempts=4):
-    """Free Google Translate web endpoint with 429 backoff."""
+def _mymemory_translate(text, target_language, source_language='auto'):
+    """Free fallback translation API used when Google Translate is rate-limited."""
     if not text.strip():
         return text
 
@@ -262,7 +262,49 @@ def _google_free_translate(text, target_language, source_language='auto', attemp
     if not target:
         return text
 
-    source_map = {'Chinese': 'zh-CN', 'Khmer': 'km'}
+    source_map = {'Chinese': 'zh-CN', 'Khmer': 'km', 'English': 'en'}
+    source = source_map.get(source_language, 'en')
+
+    url = (
+        'https://api.mymemory.translated.net/get?'
+        f'q={urllib.parse.quote(text)}'
+        f'&langpair={urllib.parse.quote(source)}%7C{urllib.parse.quote(target)}'
+    )
+
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': 'Mozilla/5.0 (Android 12; Mobile)'},
+    )
+
+    with urllib.request.urlopen(req, timeout=30) as response:
+        data = json.loads(response.read().decode('utf-8'))
+
+    result = str(
+        data.get('responseData', {}).get('translatedText', '')
+    ).strip()
+
+    if not result:
+        raise RuntimeError('MyMemory មិនបានបញ្ជូនលទ្ធផល')
+
+    # MyMemory can return a quota/error message in the translatedText field.
+    low = result.lower()
+    if 'please select' in low or 'limit' in low or 'error' in low:
+        raise RuntimeError(f'MyMemory Translation: {result}')
+
+    return result
+
+
+def _google_free_translate(text, target_language, source_language='auto', attempts=4):
+    """Google Translate first; automatically fall back to MyMemory on 429."""
+    if not text.strip():
+        return text
+
+    target_map = {'Khmer': 'km', 'Chinese': 'zh-CN', 'English': 'en'}
+    target = target_map.get(target_language)
+    if not target:
+        return text
+
+    source_map = {'Chinese': 'zh-CN', 'Khmer': 'km', 'English': 'en'}
     source = source_map.get(source_language, 'auto')
 
     url = (
@@ -271,7 +313,6 @@ def _google_free_translate(text, target_language, source_language='auto', attemp
         '&dt=t&q=' + urllib.parse.quote(text)
     )
 
-    last_error = None
     for attempt in range(attempts):
         try:
             req = urllib.request.Request(
@@ -291,86 +332,90 @@ def _google_free_translate(text, target_language, source_language='auto', attemp
                 if isinstance(part, list) and part and part[0]
             )
 
-            if not result.strip():
-                raise RuntimeError('Free Translation មិនបានបញ្ជូនលទ្ធផល')
+            if result.strip():
+                return result.strip()
 
-            return result.strip()
+            raise RuntimeError('Google Translation មិនបានបញ្ជូនលទ្ធផល')
 
         except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code != 429 or attempt == attempts - 1:
-                raise
-
-            # Google web translation can temporarily throttle bursts.
-            # Back off progressively instead of immediately sending another request.
-            retry_after = exc.headers.get('Retry-After')
-            try:
-                wait = float(retry_after)
-            except (TypeError, ValueError):
-                wait = min(8.0, 1.5 * (2 ** attempt))
-
-            time.sleep(wait)
+            # The screenshot shows HTTP 429. Do not keep hammering Google;
+            # switch to the independent free fallback immediately.
+            if exc.code == 429:
+                try:
+                    return _mymemory_translate(
+                        text, target_language, source_language
+                    )
+                except Exception:
+                    # If fallback is temporarily unavailable, retry Google
+                    # only after a short backoff.
+                    if attempt == attempts - 1:
+                        raise RuntimeError(
+                            'Google Translation និង MyMemory សុទ្ធតែមិនអាចបកប្រែបាន'
+                        ) from exc
+                    time.sleep(min(6.0, 1.5 * (2 ** attempt)))
+                    continue
+            raise
 
         except Exception as exc:
-            last_error = exc
             message = str(exc).lower()
             temporary = any(
                 code in message
-                for code in ('timed out', 'timeout', 'connection reset',
-                             'temporarily unavailable', '503', '502')
+                for code in (
+                    'timed out', 'timeout', 'connection reset',
+                    'temporarily unavailable', '503', '502'
+                )
             )
             if not temporary or attempt == attempts - 1:
-                raise
-            time.sleep(min(8.0, 1.5 * (2 ** attempt)))
+                # One final independent fallback for connection errors too.
+                try:
+                    return _mymemory_translate(
+                        text, target_language, source_language
+                    )
+                except Exception:
+                    raise
+            time.sleep(min(6.0, 1.5 * (2 ** attempt)))
 
-    raise last_error or RuntimeError('Free Translation failed')
+    raise RuntimeError('Free Translation failed')
 
 
 def _translate_batch(texts, target_language, source_language='Auto'):
-    """Translate a small batch as one request to reduce Google 429 rate limiting.
-
-    The separator is kept on its own lines so the response can be mapped back
-    to the original segments. If the batch response cannot be mapped safely,
-    the caller falls back to single-item translation.
-    """
+    """Translate small batches, with a second free provider as fallback."""
     if not texts:
         return []
 
-    # Small batches reduce the number of upstream requests dramatically.
     batch_size = 5
     separator = '\n\n<<<SMEY_SEGMENT_7F3A>>>\n\n'
     results = []
 
     for offset in range(0, len(texts), batch_size):
         batch = texts[offset:offset + batch_size]
-        combined = separator.join(t.replace('\n', ' ').strip() for t in batch)
+        combined = separator.join(
+            t.replace('\n', ' ').strip() for t in batch
+        )
 
+        # Batch Google first. If it is rate-limited, translate each item
+        # through the independent fallback instead of failing the whole job.
         try:
             translated = _google_free_translate(
-                combined,
-                target_language,
-                source_language,
+                combined, target_language, source_language
             )
-            pieces = [p.strip() for p in translated.split('<<<SMEY_SEGMENT_7F3A>>>')]
+            pieces = [
+                p.strip()
+                for p in translated.split('<<<SMEY_SEGMENT_7F3A>>>')
+            ]
 
             if len(pieces) == len(batch) and all(pieces):
                 results.extend(pieces)
-                # Small pause between batches to avoid another burst.
                 if offset + batch_size < len(texts):
                     time.sleep(0.6)
                 continue
-
         except Exception:
             pass
 
-        # Safe fallback: translate the individual items slowly with retry.
         for text in batch:
             results.append(
                 _google_free_translate(
-                    text,
-                    target_language,
-                    source_language,
-                    attempts=5,
+                    text, target_language, source_language, attempts=3
                 )
             )
             time.sleep(0.8)
