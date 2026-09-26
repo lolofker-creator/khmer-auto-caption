@@ -9,19 +9,83 @@ import time
 import wave
 import json
 import asyncio
+import numpy as np
+import soundfile as sf
 from gtts import gTTS
 import asyncio
 import streamlit as st
 from google import genai
 from google.genai import types
 import imageio_ffmpeg
-st.set_page_config(page_title='🇰🇭 Smey Auto Caption', page_icon='🇰🇭')
-st.title('🇰🇭 Smey AI Dubbing')
-st.caption('🎙️ Khmer Neural Natural Voice → Dubbing → Sync Timing')
-st.markdown('📩 **ទំនាក់ទំនងម្ចាស់កម្មវិធី:** [Telegram @Smeytk](https://t.me/Smeytk)')
+st.set_page_config(page_title='Smey AI Dubbing', page_icon='🇰🇭', layout='centered', initial_sidebar_state='collapsed')
+
+# ===== OFFICIAL USER LOGO — external PNG, no Base64 =====
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SMEY_LOGO_PATH = os.path.join(BASE_DIR, 'smey_ai_dubbing_logo.png')
+
+# ===== BEAUTIFUL UI v13 — mobile hero style =====
+st.markdown(r"""
+<style>
+.stApp{background:radial-gradient(circle at 50% -8%,rgba(40,91,180,.16),transparent 34%),linear-gradient(180deg,#070b12 0%,#0b111b 48%,#06090e 100%);color:#f7f8fb}
+[data-testid="stHeader"]{background:transparent}
+#MainMenu,footer{visibility:hidden}
+.block-container{max-width:760px;padding:12px 16px 38px}
+.smey-hero{text-align:center;margin:0 auto 18px}
+.smey-title{font-size:43px;line-height:1.02;font-weight:950;letter-spacing:-1.5px;margin:0}
+.smey-title .white{color:#f5f7fb}.smey-title .blue{color:#66d7ff}
+.smey-sub{font-size:14px;color:#e8edf6;line-height:1.7;margin:15px auto 18px;max-width:690px}
+.smey-flow{color:#f1f4f8;font-weight:650}.smey-flow .arrow{color:#62cfff;padding:0 3px}
+.smey-features{margin:8px 0 22px;padding:2px 4px 0}
+.smey-guide{border:1px solid rgba(255,255,255,.10);border-radius:18px;padding:15px 16px;margin:4px 0 18px;background:linear-gradient(145deg,rgba(255,68,55,.13),rgba(255,255,255,.035));box-shadow:0 12px 30px rgba(0,0,0,.20)}
+.smey-guide-title{font-size:18px;font-weight:900;margin-bottom:6px;color:#f7f8fb}.smey-guide-sub{font-size:12px;color:#bfc8d6;line-height:1.55;margin-bottom:8px}.smey-step{display:flex;gap:9px;align-items:flex-start;padding:6px 0;font-size:12.5px;line-height:1.55;color:#eef1f6}.smey-num{min-width:23px;height:23px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,74,55,.20);border:1px solid rgba(255,100,80,.30);font-weight:900;color:#fff}.smey-step b{color:#5bcfff}
+.smey-feature{display:flex;align-items:center;gap:14px;padding:8px 0;color:#f3f5f9;font-size:15px;line-height:1.45}
+.smey-icon{width:42px;height:42px;min-width:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:23px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);box-shadow:0 7px 20px rgba(0,0,0,.18)}
+.smey-icon.mic{color:#18e5dd}.smey-icon.cap{color:#55bfff}.smey-icon.voice{color:#ff5366}.smey-icon.img{color:#d46cff}.smey-icon.down{color:#2ee9aa}
+.smey-feature b{color:#4dc8ff}
+.smey-contact{text-align:center;margin:8px 0 20px;font-size:13px;color:#cdd5e2}.smey-contact a{color:#3db8ff!important;text-decoration:none!important;font-weight:800}
+.smey-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);margin:8px 0 20px}
+.smey-real-controls{margin:0 0 14px;padding:14px 16px;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:rgba(255,255,255,.035)}
+.smey-real-title{font-size:16px;font-weight:900;color:#f3f6fb}.smey-real-sub{font-size:12px;color:#aeb8c8;margin-top:4px}
+.smey-dubbing-top{margin:2px 0 14px}
+[data-testid="stExpander"]{border:1px solid rgba(255,255,255,.10)!important;border-radius:19px!important;background:rgba(16,20,28,.86)!important;box-shadow:0 12px 34px rgba(0,0,0,.20);overflow:hidden}
+[data-testid="stExpander"] summary{font-weight:850!important}
+[data-baseweb="select"]>div,.stTextInput input,[data-testid="stFileUploaderDropzone"]{border-radius:14px!important;border-color:rgba(255,255,255,.13)!important;background:rgba(255,255,255,.045)!important}
+[data-testid="stFileUploaderDropzone"]{padding:17px!important}
+.stButton>button,.stDownloadButton>button{border-radius:14px!important;min-height:46px!important;font-weight:850!important;border:1px solid rgba(255,255,255,.11)!important}
+.stButton>button:hover,.stDownloadButton>button:hover{transform:translateY(-1px);filter:brightness(1.06);box-shadow:0 9px 24px rgba(0,0,0,.24)}
+[data-testid="stStatusWidget"],[data-testid="stAlert"]{border-radius:16px!important}
+[data-testid="stVideo"] video{border-radius:18px;box-shadow:0 14px 35px rgba(0,0,0,.30)}
+@media(max-width:700px){.block-container{padding:8px 12px 28px}.smey-title{font-size:34px}.smey-sub{font-size:12.5px;margin-top:12px}.smey-feature{font-size:13px;gap:10px;padding:7px 0}.smey-icon{width:37px;height:37px;min-width:37px;font-size:20px;border-radius:10px}.smey-guide{padding:13px 14px;border-radius:16px}.smey-guide-title{font-size:16px}.smey-guide-sub,.smey-step{font-size:11.5px}}
+</style>
+""", unsafe_allow_html=True)
+
+if os.path.exists(SMEY_LOGO_PATH):
+    st.markdown('<div class="smey-hero">', unsafe_allow_html=True)
+    st.image(SMEY_LOGO_PATH, width=190)
+    st.markdown("""<div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div>
+<div class="smey-sub"><span class="smey-flow">បញ្ចូលវីដេអូ <span class="arrow">→</span> បកប្រែ <span class="arrow">→</span> បង្កើតសំឡេង <span class="arrow">→</span> ដាក់សំឡេងថ្មី <span class="arrow">→</span> MP4 រួចរាល់</span></div></div>""", unsafe_allow_html=True)
+else:
+    st.markdown('<div class="smey-hero"><div class="smey-title"><span class="white">🇰🇭 Smey AI</span><br><span class="blue">Dubbing</span></div></div>', unsafe_allow_html=True)
+
+# Reserve the exact position directly under the logo/hero for the REAL AI Dubbing controls.
+# The container is filled later, after all helper functions are defined, so the controls remain fully functional.
+dubbing_slot = st.empty()
+
+st.markdown("""
+<div class="smey-guide">
+  <div class="smey-guide-title">📖 របៀបប្រើ Smey AI Dubbing</div>
+  <div class="smey-guide-sub">ធ្វើតាម 4 ជំហានខាងក្រោម ដើម្បីបង្កើតវីដេអូ Dubbing និង Caption។</div>
+  <div class="smey-step"><span class="smey-num">1</span><span><b>Upload Video</b> — ជ្រើសវីដេអូដែលអ្នកចង់ធ្វើ Dubbing ឬ Caption។</span></div>
+  <div class="smey-step"><span class="smey-num">2</span><span><b>ជ្រើសភាសា</b> — កំណត់ភាសាសំឡេងដើម និងភាសាដែលចង់បម្លែង។</span></div>
+  <div class="smey-step"><span class="smey-num">3</span><span><b>ជ្រើសសំឡេង</b> — ជ្រើស Neural Voice ដែលអ្នកចង់ប្រើសម្រាប់ Dubbing។</span></div>
+  <div class="smey-step"><span class="smey-num">4</span><span><b>បង្កើត MP4</b> — ប្រព័ន្ធនឹង Transcribe → Translate → Voice → Sync ហើយបង្កើតវីដេអូរួចរាល់។</span></div>
+</div>
+<div class="smey-contact">📩 ទំនាក់ទំនងម្ចាស់កម្មវិធី: <a href="https://t.me/Smeytk">Telegram @Smeytk</a></div>
+<div class="smey-divider"></div>
+""", unsafe_allow_html=True)
+
 TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
 TRANSLATE_MODEL = 'gemini-3.1-flash-lite'
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
 FONT_PATH = os.path.join(FONT_DIR, 'NotoSansKhmer-Regular.ttf')
 FONT_URL = 'https://raw.githubusercontent.com/ghostlypi/NotoSans/main/NotoSansKhmer-Regular.ttf'
@@ -796,67 +860,233 @@ def webpage_download(page_url, output_path):
     return page_media_download(page_url, output_path)
 
 
-st.divider()
-api_key = get_api_key()
-with st.expander("🎙️ Upload Human Voice — សម្លេងមនុស្សពិត", expanded=False):
-    st.caption("ជ្រើសតែឯកសារសម្លេង MP3 / WAV / M4A / AAC / OGG / FLAC")
-    human_voice = st.file_uploader(
-        "🎙️ Upload Human Voice",
-        type=["mp3", "wav", "m4a", "aac", "ogg", "flac"],
-        key="human_voice_audio_only"
+# =========================================================
+# VOICE CLONE — VoxCPM2 (Khmer supported)
+# =========================================================
+@st.cache_resource(show_spinner=False)
+def get_voxcpm2_model():
+    try:
+        from voxcpm import VoxCPM
+    except ImportError as e:
+        raise RuntimeError(
+            'VoxCPM2 មិនទាន់ត្រូវបានដំឡើង។ សូមបន្ថែម voxcpm និង soundfile ក្នុង requirements.txt។'
+        ) from e
+
+    # Lazy-load only when Voice Clone is selected so the existing app remains unchanged.
+    return VoxCPM.from_pretrained(
+        'openbmb/VoxCPM2',
+        load_denoiser=False,
+        optimize=False,
     )
-    if human_voice:
-        st.audio(human_voice)
 
-with st.expander('🎙️ AI Dubbing — សំឡេងធម្មជាតិ + Sync Timing'):
-    st.caption('🎙️ Human-like Neural Voice — សំឡេងទន់ ធម្មជាតិ និងកុំឱ្យលឿន/យឺតខ្លាំងពេក។')
-    dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
-    dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
-    voice_options = {
-        'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
-        'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
-        'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
+
+def prepare_clone_reference(uploaded_file, temp_dir):
+    """Convert the user's authorized reference voice to 16 kHz mono WAV."""
+    source = os.path.join(temp_dir, 'voice_reference_input')
+    with open(source, 'wb') as f:
+        f.write(uploaded_file.getbuffer())
+    reference = os.path.join(temp_dir, 'voice_reference_16k.wav')
+    command = [
+        ffmpeg(), '-y', '-i', source,
+        '-vn', '-ac', '1', '-ar', '16000',
+        '-c:a', 'pcm_s16le', reference,
+    ]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0 or not os.path.isfile(reference):
+        error = result.stderr.decode('utf-8', errors='ignore')
+        raise RuntimeError('មិនអាចរៀបចំសម្លេង Reference បាន:\n' + error[-2500:])
+    if audio_duration(reference) < 1.0:
+        raise RuntimeError('សម្លេង Reference ខ្លីពេក។ សូមប្រើសម្លេងច្បាស់ប្រហែល 5–15 វិនាទី។')
+    return reference
+
+
+def voxcpm2_clone_segment(text, reference_audio, output_wav, prompt_text=''):
+    """Generate target speech using the uploaded reference voice."""
+    model = get_voxcpm2_model()
+    kwargs = {
+        'text': text,
+        'reference_wav_path': reference_audio,
+        'cfg_value': 2.0,
+        'inference_timesteps': 10,
     }
-    voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
-    dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
-    if dub_video:
-        st.video(dub_video)
-    if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
-        if not api_key:
-            st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
-            st.stop()
-        if not dub_video:
-            st.warning('សូម Upload Video ជាមុន')
-            st.stop()
-        client=get_gemini_client(api_key)
-        temp_dir=tempfile.mkdtemp()
-        input_video=os.path.join(temp_dir,'dub_input.mp4')
-        audio_path=os.path.join(temp_dir,'dub_source.wav')
-        output_video=os.path.join(temp_dir,'Smey_AI_Dubbing.mp4')
-        try:
-            with open(input_video,'wb') as f: f.write(dub_video.getbuffer())
-            with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
-                st.write('🎧 1/4 កំពុងយកសំឡេង និង Word Timing...')
-                extract_audio(input_video,audio_path)
-                transcription=transcribe(client,audio_path,dub_source if dub_source!='Auto' else None)
-                words=words_from(transcription)
-                if not words: raise RuntimeError('រកមិនឃើញ Word Timing')
-                groups=make_groups(words)
-                st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
-                translated=translate_groups(client,groups,dub_target,dub_source)
-                st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
-                total=max((x['end'] for x in groups), default=audio_duration(audio_path))
-                voice=voice_options[dub_target][voice_label]
-                dub_audio=make_dubbing_audio(translated,voice,temp_dir,total)
-                st.write('🎬 4/4 កំពុងប្ដូរសំឡេងចូលវីដេអូ...')
-                replace_video_audio(input_video,dub_audio,output_video)
-                status.update(label='✅ Dubbing រួចរាល់!',state='complete')
-            st.subheader('🎬 Result Dubbing')
-            st.video(output_video)
-            with open(output_video,'rb') as f:
-                dubbing_data = f.read()
-            st.download_button('📥 Download Dubbing MP4', dubbing_data, file_name='Smey_AI_Dubbing.mp4', mime='video/mp4', key='download_dubbing', on_click='ignore')
-            st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។ វានៅតែជា AI voice មិនមែនសំឡេងមនុស្សថតផ្ទាល់ទេ។')
-        except Exception as e:
-            st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
+    # Ultimate cloning can use the reference transcript when the user supplies it.
+    if prompt_text.strip():
+        kwargs['prompt_wav_path'] = reference_audio
+        kwargs['prompt_text'] = prompt_text.strip()
 
+    wav = model.generate(**kwargs)
+    if wav is None or len(wav) == 0:
+        raise RuntimeError('VoxCPM2 មិនបានបង្កើតសម្លេងចេញមកទេ។')
+    sf.write(output_wav, np.asarray(wav), int(model.tts_model.sample_rate))
+    return output_wav
+
+
+def make_voice_clone_audio(groups, reference_audio, prompt_text, temp_dir, total_duration):
+    """Clone one reference voice across all translated segments and preserve timing."""
+    segment_paths = []
+    for i, item in enumerate(groups):
+        text = str(item['text']).strip()
+        if not text:
+            continue
+        raw = os.path.join(temp_dir, f'clone_raw_{i:04d}.wav')
+        fitted = os.path.join(temp_dir, f'clone_fit_{i:04d}.wav')
+        voxcpm2_clone_segment(text, reference_audio, raw, prompt_text)
+        fit_audio_to_duration(
+            raw,
+            fitted,
+            max(0.25, item['end'] - item['start']),
+        )
+        segment_paths.append((item['start'], fitted))
+
+    if not segment_paths:
+        raise RuntimeError('មិនអាចបង្កើតសម្លេង Clone បានទេ។')
+
+    silent = os.path.join(temp_dir, 'clone_silent.wav')
+    cmd = [
+        ffmpeg(), '-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+        '-t', str(max(total_duration, 0.1)), '-c:a', 'pcm_s16le', silent,
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise RuntimeError('បង្កើត Clone timeline មិនបាន')
+
+    inputs = ['-i', silent]
+    for _, path in segment_paths:
+        inputs += ['-i', path]
+    filters = []
+    labels = []
+    for idx, (start, _) in enumerate(segment_paths, start=1):
+        label = f'c{idx}'
+        filters.append(f'[{idx}:a]adelay={int(start * 1000)}:all=1[{label}]')
+        labels.append(f'[{label}]')
+    filters.append(
+        ''.join(labels)
+        + f'amix=inputs={len(labels)}:duration=longest:normalize=0[clone]'
+    )
+    output = os.path.join(temp_dir, 'voice_clone.wav')
+    cmd = [
+        ffmpeg(), '-y', *inputs,
+        '-filter_complex', ';'.join(filters),
+        '-map', '[clone]', '-t', str(total_duration),
+        '-c:a', 'pcm_s16le', output,
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode('utf-8', errors='ignore')[-4000:])
+    return output
+
+
+
+
+api_key = get_api_key()
+with dubbing_slot.container():
+    st.markdown('<div class="smey-dubbing-top">', unsafe_allow_html=True)
+    with st.expander('🎙️ AI Dubbing — Neural Voice + Voice Clone + Sync', expanded=True):
+        st.caption('🎙️ ជ្រើស Neural Voice ឬ Voice Clone ដោយប្រើសម្លេង Reference ដែលអ្នកមានសិទ្ធិប្រើ។')
+
+        dub_mode = st.radio(
+            '🎛️ របៀបបង្កើតសំឡេង',
+            ['Neural Voice', '🎙️ Voice Clone — សម្លេងផ្ទាល់ខ្លួន'],
+            horizontal=True,
+            key='dub_mode_v17',
+        )
+        dub_source = st.selectbox('ភាសាសំឡេងដើម', ['Auto', 'Chinese', 'Khmer'], key='dub_source')
+        dub_target = st.selectbox('ភាសា Dubbing', ['Khmer', 'Chinese', 'English'], key='dub_target')
+
+        voice_options = {
+            'Khmer': {'🇰🇭 Khmer Neural — Female': 'km-KH-SreymomNeural', '🇰🇭 Khmer Neural — Male': 'km-KH-PisethNeural'},
+            'Chinese': {'ប្រុស': 'zh-CN-YunxiNeural', 'ស្រី': 'zh-CN-XiaoxiaoNeural'},
+            'English': {'ប្រុស': 'en-US-GuyNeural', 'ស្រី': 'en-US-JennyNeural'}
+        }
+
+        reference_voice = None
+        prompt_text = ''
+        if dub_mode.startswith('🎙️'):
+            st.info('🎙️ Upload សម្លេងរបស់អ្នក ឬសម្លេងដែលអ្នកមានការអនុញ្ញាតឱ្យ Clone។ ប្រើសម្លេងច្បាស់ប្រហែល 5–15 វិនាទី។')
+            reference_voice = st.file_uploader(
+                '🎤 Upload Voice Reference',
+                type=['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac'],
+                key='clone_reference_v17',
+            )
+            prompt_text = st.text_area(
+                '📝 អត្ថបទដែលនិយាយក្នុង Voice Reference (Optional — ជួយឱ្យ Clone ដូចជាងមុន)',
+                placeholder='ឧ. សួស្តី ខ្ញុំឈ្មោះ ស្មី... ',
+                height=80,
+                key='clone_prompt_text_v17',
+            )
+            st.caption('🇰🇭 VoxCPM2 គាំទ្រភាសាខ្មែរ និង Voice Cloning។ Model នឹងត្រូវទាញយកនៅពេលប្រើលើកដំបូង។')
+        else:
+            voice_label = st.selectbox('🎤 ជ្រើសសំឡេង', list(voice_options[dub_target].keys()), key='dub_voice')
+
+        dub_video = st.file_uploader('📤 Upload Video សម្រាប់ Dubbing', type=['mp4','mov','mkv','webm','avi'], key='dub_video')
+        if dub_video:
+            st.video(dub_video)
+
+        if st.button('🎙️ បង្កើត Dubbing', type='primary', key='dub_button'):
+            if not api_key:
+                st.error('មិនទាន់កំណត់ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។')
+                st.stop()
+            if not dub_video:
+                st.warning('សូម Upload Video ជាមុន')
+                st.stop()
+            if dub_mode.startswith('🎙️') and not reference_voice:
+                st.warning('សូម Upload Voice Reference ជាមុន')
+                st.stop()
+
+            client = get_gemini_client(api_key)
+            temp_dir = tempfile.mkdtemp()
+            input_video = os.path.join(temp_dir, 'dub_input.mp4')
+            audio_path = os.path.join(temp_dir, 'dub_source.wav')
+            output_video = os.path.join(temp_dir, 'Smey_AI_Dubbing.mp4')
+            try:
+                with open(input_video, 'wb') as f:
+                    f.write(dub_video.getbuffer())
+                with st.status('កំពុងបង្កើត Dubbing...', expanded=True) as status:
+                    st.write('🎧 1/4 កំពុងយកសំឡេង និង Word Timing...')
+                    extract_audio(input_video, audio_path)
+                    transcription = transcribe(client, audio_path, dub_source if dub_source != 'Auto' else None)
+                    words = words_from(transcription)
+                    if not words:
+                        raise RuntimeError('រកមិនឃើញ Word Timing')
+                    groups = make_groups(words)
+                    st.write('🔄 2/4 កំពុងបកប្រែដោយ Free Translation (មិនប្រើ Gemini quota)...')
+                    translated = translate_groups(client, groups, dub_target, dub_source)
+
+                    total = max((x['end'] for x in groups), default=audio_duration(audio_path))
+                    if dub_mode.startswith('🎙️'):
+                        st.write('🎙️ 3/4 កំពុង Clone សម្លេង + Sync Timing...')
+                        reference_path = prepare_clone_reference(reference_voice, temp_dir)
+                        dub_audio = make_voice_clone_audio(
+                            translated,
+                            reference_path,
+                            prompt_text,
+                            temp_dir,
+                            total,
+                        )
+                    else:
+                        st.write('🎙️ 3/4 កំពុងបង្កើត Neural Voice និង Sync Timing...')
+                        voice = voice_options[dub_target][voice_label]
+                        dub_audio = make_dubbing_audio(translated, voice, temp_dir, total)
+
+                    st.write('🎬 4/4 កំពុងដាក់សំឡេងចូលវីដេអូ និងរក្សា Background Music...')
+                    replace_video_audio(input_video, dub_audio, output_video)
+                    status.update(label='✅ Dubbing រួចរាល់!', state='complete')
+
+                st.subheader('🎬 Result Dubbing')
+                st.video(output_video)
+                with open(output_video, 'rb') as f:
+                    dubbing_data = f.read()
+                st.download_button(
+                    '📥 Download Dubbing MP4',
+                    dubbing_data,
+                    file_name='Smey_AI_Dubbing_VoiceClone.mp4' if dub_mode.startswith('🎙️') else 'Smey_AI_Dubbing.mp4',
+                    mime='video/mp4',
+                    key='download_dubbing_v17',
+                    on_click='ignore',
+                )
+                if dub_mode.startswith('🎙️'):
+                    st.success('🎙️ Voice Clone រួចរាល់ — សំឡេងថ្មីប្រើ timbre ពី Voice Reference ហើយ Sync ជាមួយ Caption Timing។')
+                else:
+                    st.info('ℹ️ Human-like Neural Voice: កែល្បឿនតែបន្តិច + កែសំឡេងឱ្យទន់/ច្បាស់ + រក្សា Background Music។')
+            except Exception as e:
+                st.error(f'❌ Dubbing មិនអាចបញ្ចប់បាន: {e}')
