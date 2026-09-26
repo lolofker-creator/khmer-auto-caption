@@ -4,6 +4,6 @@ edge-tts
 yt-dlp
 gTTS
 imageio-ffmpeg
-gradio_client
+gradio_client>=2.7.1
 soundfile
 numpy
